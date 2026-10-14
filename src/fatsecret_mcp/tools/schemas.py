@@ -7,9 +7,11 @@ into these shapes.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Annotated, Literal
 
+from mcp_types import CallToolResult, TextContent
 from pydantic import BaseModel, Field
 
 from fatsecret_mcp.domain.models import (
@@ -209,6 +211,20 @@ class FoodSearch(BaseModel):
     status: Literal["found", "not_found"]
     matches: list[FoodMatch]
     attribution: str = ATTRIBUTION
+
+
+def as_tool_result(result: BaseModel) -> CallToolResult:
+    """`result` as the tool's answer: structured, plus the same JSON as compact text for the model.
+
+    The SDK's own text copy is indented, which costs about 60% more tokens and carries nothing more.
+    """
+    structured = result.model_dump(mode="json")
+    text = json.dumps(structured, ensure_ascii=False, separators=(",", ":"))
+
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structured_content=structured,
+    )
 
 
 def _rounded(grams: float) -> float:

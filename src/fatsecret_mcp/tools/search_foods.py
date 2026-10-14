@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Annotated
 
 import anyio
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp_types import ToolAnnotations
+from mcp_types import CallToolResult, ToolAnnotations
 
 from fatsecret_mcp.config.models import User
 from fatsecret_mcp.domain.diary_day import Clock, today
@@ -15,7 +16,13 @@ from fatsecret_mcp.domain.models import FoodEntry
 from fatsecret_mcp.domain.recent_foods import matching_recent_foods, recent_diary_days, recent_foods
 from fatsecret_mcp.fatsecret.errors import FatSecretError, NotFound
 from fatsecret_mcp.fatsecret.gateway import AccessToken, FatSecretGateway
-from fatsecret_mcp.tools.schemas import EnglishRendering, FoodDescription, FoodMatch, FoodSearch
+from fatsecret_mcp.tools.schemas import (
+    EnglishRendering,
+    FoodDescription,
+    FoodMatch,
+    FoodSearch,
+    as_tool_result,
+)
 
 RECENT_FOODS_LIMIT = 5
 CATALOG_LIMIT = 5
@@ -27,18 +34,20 @@ def register(
     @server.tool(annotations=ToolAnnotations(title="Search Foods", read_only_hint=True))
     async def search_foods(
         description: FoodDescription, english_rendering: EnglishRendering = None
-    ) -> FoodSearch:
+    ) -> Annotated[CallToolResult, FoodSearch]:
         """Find Foods with loggable Servings, kcal and Macros: the User's Recent Foods, then the catalog.
 
-        Pass the User's original description and, for non-English input, an English rendering.
-        Recent Foods are Foods the User logged in recent weeks, often local or branded products the
-        catalog lacks. They're matched on both texts, ignoring case and diacritics, and always come
-        first. The catalog is searched with the English rendering, or the original when omitted.
-        Each match names its source. A Recent Food keeps the name it was logged with and offers only
-        the Servings the User logged it with, each as last logged. Nutrition and metric amounts
-        describe the whole Serving; number_of_units is its FatSecret unit count. A not_found result is
-        normal. For a missing branded product, the User can add it once in the FatSecret app. This
-        tool does not write to the Food Diary.
+        Search one food at a time. Pass the User's original description and, for non-English input,
+        an English rendering. Recent Foods are Foods the User logged in recent weeks, often local or
+        branded products the catalog lacks. They're matched on both texts, ignoring case and
+        diacritics; only the best matches are returned, and they always come first. The catalog is
+        searched with the English rendering, or the original when omitted. Each match names its
+        source. A Recent Food keeps the name it was logged with and offers only the Servings the User
+        logged it with, each as last logged; its metric amount is known once the User has logged
+        that Serving in grams or millilitres. Nutrition and metric amounts describe the whole
+        Serving; number_of_units is its FatSecret unit count. A not_found result is normal. For a
+        missing branded product, the User can add it once in the FatSecret app. This tool does not
+        write to the Food Diary.
         """
         if not description.strip():
             raise ToolError("description must not be blank.")
@@ -61,10 +70,12 @@ def register(
         recent_matches = [FoodMatch.of_recent_food(food) for food in matching[:RECENT_FOODS_LIMIT]]
         matches = recent_matches + catalog_matches
 
-        return FoodSearch(
+        found = FoodSearch(
             status="found" if matches else "not_found",
             matches=matches,
         )
+
+        return as_tool_result(found)
 
 
 async def _list_food_entries(

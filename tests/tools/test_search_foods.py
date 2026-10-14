@@ -488,11 +488,24 @@ async def test_a_stand_in_and_real_entries_of_its_food_are_separate_recent_foods
     assert [serving["kcal"] for serving in chicken["matches"][0]["servings"]] == [293]
 
 
-async def test_recent_foods_are_ranked_by_match_quality_then_frequency_then_recency(
+async def test_only_the_best_matching_recent_foods_are_offered(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    for name in ("Skyr Waniliowy", "Pudding Proteinowy Waniliowy", "Bakoma Skyr Naturalny"):
+        fatsecret.add_food_entry(jakub, logged(name, days_ago(1)))
+
+    async with connect("jakub") as client:
+        vanilla_skyr = await search(client, "skyr waniliowy", "vanilla skyr")
+        any_vanilla = await search(client, "coś waniliowego")
+
+    assert recent_food_names(vanilla_skyr) == ["Skyr Waniliowy"]
+    assert recent_food_names(any_vanilla) == ["Skyr Waniliowy", "Pudding Proteinowy Waniliowy"]
+
+
+async def test_equally_good_matches_are_ranked_by_frequency_then_recency(
     connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
 ) -> None:
     diary = {
-        "Skyr Waniliowy": [9],
         "Skyr Naturalny": [10, 9, 8],
         "Skyr Truskawkowy": [4, 3, 2],
         "Skyr Jagodowy": [0],
@@ -503,14 +516,58 @@ async def test_recent_foods_are_ranked_by_match_quality_then_frequency_then_rece
             fatsecret.add_food_entry(jakub, logged(name, days_ago(days_before)))
 
     async with connect("jakub") as client:
-        found = await search(client, "skyr waniliowy")
+        found = await search(client, "skyr")
 
-    assert recent_food_names(found) == [
-        "Skyr Waniliowy",
-        "Skyr Truskawkowy",
-        "Skyr Naturalny",
-        "Skyr Jagodowy",
-    ]
+    assert recent_food_names(found) == ["Skyr Truskawkowy", "Skyr Naturalny", "Skyr Jagodowy"]
+
+
+async def test_a_name_with_the_brand_in_front_is_the_same_recent_food(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    oats = {"food_id": "124208300", "serving_id": "97561866", "kcal": 257}
+
+    fatsecret.add_food_entry(
+        jakub,
+        logged(
+            "Crownfield Płatki Owsiane Błyskawiczne", days_ago(3), **oats, amount="70 g", number_of_units=0.7
+        ),
+    )
+    fatsecret.add_food_entry(
+        jakub,
+        logged("Płatki Owsiane Błyskawiczne", days_ago(1), **oats, amount="0.7 serving", number_of_units=0.7),
+    )
+
+    async with connect("jakub") as client:
+        found = await search(client, "płatki owsiane")
+
+    [match] = found["matches"]
+
+    assert match["name"] == "Crownfield Płatki Owsiane Błyskawiczne"
+    assert [serving["description"] for serving in match["servings"]] == ["0.7 serving"]
+
+
+async def test_a_serving_once_logged_in_grams_shows_its_grams(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    skyr = {"food_id": "51467582", "serving_id": "43596665"}
+
+    # Typed in the app as 200 g: FatSecret stores it as 2 servings.
+    fatsecret.add_food_entry(
+        jakub, logged("Skyr Waniliowy", days_ago(10), **skyr, amount="200 g", number_of_units=2, kcal=148)
+    )
+    fatsecret.add_food_entry(
+        jakub,
+        logged("Skyr Waniliowy", days_ago(1), **skyr, amount="1.7 servings", number_of_units=1.7, kcal=126),
+    )
+
+    async with connect("jakub") as client:
+        found = await search(client, "skyr")
+
+    [serving] = found["matches"][0]["servings"]
+
+    assert serving["description"] == "1.7 servings"
+    assert serving["metric_amount"] == 170
+    assert serving["metric_unit"] == "g"
 
 
 async def test_a_search_offers_the_five_best_recent_foods(

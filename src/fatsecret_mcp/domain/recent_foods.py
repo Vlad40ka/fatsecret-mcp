@@ -3,7 +3,8 @@
 They're built from the User's own Food Entries, not from the catalog: a Basic key can't fetch non-US
 Foods, and the catalog doesn't know a Stand-in's name. So each Serving carries the amount, units, kcal
 and Macros of the Food Entry it was last logged in. Per unit, that's the entry's values divided by its
-number of units, just like a catalog Serving.
+number of units, just like a catalog Serving. Its grams come from any Food Entry of that Serving
+logged in grams: if 0.7 servings were 70 g, then 1.7 servings are 170 g.
 
 Matching ignores case and diacritics and compares words. Words match without their final vowels, so
 Polish endings don't get in the way: "jajka" matches "Jajko", and "kurczaka" matches "Kurczak".
@@ -15,7 +16,7 @@ import re
 import unicodedata
 from datetime import date, timedelta
 
-from fatsecret_mcp.domain.models import FoodEntry, RecentFood, Serving
+from fatsecret_mcp.domain.models import FoodEntry, MetricAmount, RecentFood, Serving
 
 DERIVED_SERVING_ID = "0"
 """FatSecret's computed Serving, which can't be logged."""
@@ -68,61 +69,132 @@ def recent_diary_days(today: date, days: int) -> list[date]:
 
 
 def recent_foods(entries: list[FoodEntry]) -> list[RecentFood]:
-    """The User's Food Entries, de-duplicated by Food, Serving and entry name."""
+    """The User's Food Entries, de-duplicated by Food, Serving and entry name.
+
+    Names that differ only by a brand in front count as one: the FatSecret app sometimes logs
+    "Crownfield Płatki Owsiane" and sometimes "Płatki Owsiane". A Stand-in's name has nothing in common
+    with its Food's, so it stays a Recent Food of its own.
+    """
     chronological = sorted(entries, key=lambda entry: entry.diary_day)
+    loggable = [entry for entry in chronological if entry.serving_id != DERIVED_SERVING_ID]
+    product_names = _product_names(loggable)
+    metric_per_unit = _metric_per_unit(loggable)
     by_food_and_name: dict[tuple[str, str], list[FoodEntry]] = {}
 
-    for entry in chronological:
-        if entry.serving_id != DERIVED_SERVING_ID:
-            by_food_and_name.setdefault((entry.food_id, entry.name), []).append(entry)
+    for entry in loggable:
+        name = product_names[(entry.food_id, entry.name)]
 
-    foods = [_recent_food(food_entries) for food_entries in by_food_and_name.values()]
+        by_food_and_name.setdefault((entry.food_id, name), []).append(entry)
+
+    foods = [
+        _recent_food(name, food_entries, metric_per_unit)
+        for (_, name), food_entries in by_food_and_name.items()
+    ]
 
     return foods
 
 
 def matching_recent_foods(foods: list[RecentFood], descriptions: list[str]) -> list[RecentFood]:
-    """The Recent Foods whose name shares a word with one of the descriptions, the best match first.
+    """The Recent Foods that match the descriptions best, the most often and most recently logged first.
 
-    Ranked by match quality, then by how often and how recently the User logged them.
+    The best match has the largest share of a description's words in its name. Weaker matches are left
+    out, so "skyr waniliowy" finds "Skyr Waniliowy" rather than every skyr and every vanilla pudding.
     """
     word_lists = [_words(description) for description in descriptions]
-    matches = [food for food in foods if _match_quality(food.name, word_lists) > 0]
-    ranked = sorted(matches, key=lambda food: _rank(food, word_lists))
+    qualities = [_match_quality(food.name, word_lists) for food in foods]
+    best = max(qualities, default=0)
+
+    if best == 0:
+        return []
+
+    best_matches = [food for food, quality in zip(foods, qualities, strict=True) if quality == best]
+    ranked = sorted(best_matches, key=_by_frequency_and_recency)
 
     return ranked
 
 
-def _recent_food(entries: list[FoodEntry]) -> RecentFood:
-    """One Food under one entry name, from its Food Entries in chronological order."""
+def _product_names(entries: list[FoodEntry]) -> dict[tuple[str, str], str]:
+    """The name each Food and entry name is shown under: the Food's longest name that ends with it."""
+    names_by_food: dict[str, list[str]] = {}
+
+    # The most recent first, so that of two names differing only in case, the later one is shown.
+    for entry in reversed(entries):
+        names = names_by_food.setdefault(entry.food_id, [])
+
+        if entry.name not in names:
+            names.append(entry.name)
+
+    product_names: dict[tuple[str, str], str] = {}
+
+    for food_id, names in names_by_food.items():
+        for name in names:
+            product_names[(food_id, name)] = _longest_ending_with(name, names)
+
+    return product_names
+
+
+def _longest_ending_with(name: str, names: list[str]) -> str:
+    """The longest of `names` that is `name`, ignoring case, or ends with it after a space."""
+    ending = name.casefold()
+    candidates = [other for other in names if _ends_with_words(other.casefold(), ending)]
+
+    return max(candidates, key=len)
+
+
+def _ends_with_words(name: str, ending: str) -> bool:
+    return name == ending or name.endswith(f" {ending}")
+
+
+def _metric_per_unit(entries: list[FoodEntry]) -> dict[tuple[str, str], MetricAmount]:
+    """The grams or millilitres in one unit of each Serving, from its last Food Entry logged in them."""
+    per_unit: dict[tuple[str, str], MetricAmount] = {}
+
+    for entry in entries:
+        metric = METRIC_AMOUNT.fullmatch(entry.amount)
+
+        if metric and entry.number_of_units > 0:
+            per_unit[(entry.food_id, entry.serving_id)] = MetricAmount(
+                amount=float(metric["amount"]) / entry.number_of_units,
+                unit=metric["unit"],
+            )
+
+    return per_unit
+
+
+def _recent_food(
+    name: str, entries: list[FoodEntry], metric_per_unit: dict[tuple[str, str], MetricAmount]
+) -> RecentFood:
+    """One Food under one name, from its Food Entries in chronological order."""
     last = entries[-1]
 
     return RecentFood(
         food_id=last.food_id,
-        name=last.name,
-        servings=_servings_as_last_logged(entries),
+        name=name,
+        servings=_servings_as_last_logged(entries, metric_per_unit),
         times_logged=len(entries),
         last_logged=last.diary_day,
     )
 
 
-def _servings_as_last_logged(entries: list[FoodEntry]) -> list[Serving]:
+def _servings_as_last_logged(
+    entries: list[FoodEntry], metric_per_unit: dict[tuple[str, str], MetricAmount]
+) -> list[Serving]:
     """Each Serving the Food Entries were logged with, as last logged, the most recent first."""
     last_entries: dict[str, FoodEntry] = {}
 
     for entry in reversed(entries):
         last_entries.setdefault(entry.serving_id, entry)
 
-    servings = [_serving_as_logged(entry) for entry in last_entries.values()]
+    servings = [_serving_as_logged(entry, metric_per_unit) for entry in last_entries.values()]
 
     return servings
 
 
-def _serving_as_logged(entry: FoodEntry) -> Serving:
-    """A Serving described by the amount it was logged in, e.g. "150 g": 150 units of FatSecret's "100 g"."""
-    metric = METRIC_AMOUNT.fullmatch(entry.amount)
-    metric_amount = float(metric["amount"]) if metric else None
-    metric_unit = metric["unit"] if metric else None
+def _serving_as_logged(entry: FoodEntry, metric_per_unit: dict[tuple[str, str], MetricAmount]) -> Serving:
+    """A Serving described by the amount it was logged in, e.g. "150 g" or "1.7 servings"."""
+    per_unit = metric_per_unit.get((entry.food_id, entry.serving_id))
+    metric_amount = round(per_unit.amount * entry.number_of_units, 1) if per_unit else None
+    metric_unit = per_unit.unit if per_unit else None
 
     return Serving(
         id=entry.serving_id,
@@ -134,11 +206,9 @@ def _serving_as_logged(entry: FoodEntry) -> Serving:
     )
 
 
-def _rank(food: RecentFood, word_lists: list[list[str]]) -> tuple[float, int, int]:
-    """Sort key: the best match first, then the most often logged, then the most recently logged."""
-    quality = _match_quality(food.name, word_lists)
-
-    return (-quality, -food.times_logged, -food.last_logged.toordinal())
+def _by_frequency_and_recency(food: RecentFood) -> tuple[int, int]:
+    """Sort key: the most often logged first, then the most recently logged."""
+    return (-food.times_logged, -food.last_logged.toordinal())
 
 
 def _match_quality(name: str, word_lists: list[list[str]]) -> float:

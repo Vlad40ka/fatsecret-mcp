@@ -66,6 +66,14 @@ class CatalogFood:
 
 
 @dataclass(frozen=True)
+class MetricAmount:
+    """An amount in grams ("g") or millilitres ("ml")."""
+
+    amount: float
+    unit: str
+
+
+@dataclass(frozen=True)
 class Serving:
     id: str
     description: str
