@@ -1,0 +1,40 @@
+{
+  "description": "Per-day totals after deleting every Food Entry on one of the two test days. That day stays in the list with zeros; only the other day has real totals.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food_entries.get_month.v2",
+      "format": "json",
+      "date": "16436"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "month": {
+        "day": [
+          {
+            "calories": "0",
+            "carbohydrate": "0",
+            "date_int": "16447",
+            "fat": "0",
+            "protein": "0"
+          },
+          {
+            "calories": "74",
+            "carbohydrate": "9.20",
+            "date_int": "16448",
+            "fat": "1.30",
+            "protein": "6.40"
+          }
+        ],
+        "from_date_int": "16436",
+        "to_date_int": "16466"
+      }
+    }
+  }
+}

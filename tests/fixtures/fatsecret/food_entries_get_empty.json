@@ -1,0 +1,21 @@
+{
+  "description": "Food Entries for a Diary Day with none.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food_entries.get.v2",
+      "format": "json",
+      "date": "16449"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "food_entries": null
+    }
+  }
+}

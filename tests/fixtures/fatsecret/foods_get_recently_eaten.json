@@ -1,0 +1,40 @@
+{
+  "description": "foods.get_recently_eaten.v2, filtered down to the test Foods (other items removed).",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.get_recently_eaten.v2",
+      "format": "json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "foods": {
+        "food": [
+          {
+            "brand_name": "Pilos",
+            "food_id": "51467582",
+            "food_name": "Skyr Waniliowy",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/pl/pilos/skyr-waniliowy/100g",
+            "number_of_units": "1.000",
+            "serving_id": "43596665"
+          },
+          {
+            "food_id": "1641",
+            "food_name": "Chicken Breast",
+            "food_type": "Generic",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-ns-as-to-skin-eaten?portionid=4834&portionamount=1.000",
+            "number_of_units": "1.000",
+            "serving_id": "4834"
+          }
+        ]
+      }
+    }
+  }
+}

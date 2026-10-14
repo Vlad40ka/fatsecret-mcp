@@ -1,0 +1,104 @@
+{
+  "description": "Catalog search (foods.search v1), several results.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.search",
+      "format": "json",
+      "search_expression": "chicken breast",
+      "max_results": "10"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "foods": {
+        "food": [
+          {
+            "food_description": "Per 101g - Calories: 197kcal | Fat: 7.79g | Carbs: 0.00g | Protein: 29.80g",
+            "food_id": "1641",
+            "food_name": "Chicken Breast",
+            "food_type": "Generic",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-ns-as-to-skin-eaten"
+          },
+          {
+            "food_description": "Per 100g - Calories: 110kcal | Fat: 1.24g | Carbs: 0.00g | Protein: 23.09g",
+            "food_id": "4881229",
+            "food_name": "Skinless Chicken Breast",
+            "food_type": "Generic",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-skinless"
+          },
+          {
+            "brand_name": "Kirkland Signature",
+            "food_description": "Per 4 oz - Calories: 90kcal | Fat: 1.50g | Carbs: 0.00g | Protein: 20.00g",
+            "food_id": "5673332",
+            "food_name": "Chicken Breast",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/kirkland-signature/chicken-breast"
+          },
+          {
+            "brand_name": "Publix",
+            "food_description": "Per 4 oz - Calories: 130kcal | Fat: 3.00g | Carbs: 0.00g | Protein: 25.00g",
+            "food_id": "742402",
+            "food_name": "Boneless Skinless Chicken Breast",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/publix/boneless-skinless-chicken-breast"
+          },
+          {
+            "food_description": "Per 101g - Calories: 197kcal | Fat: 7.79g | Carbs: 0.00g | Protein: 29.80g",
+            "food_id": "1644",
+            "food_name": "Roasted Broiled or Baked Chicken Breast",
+            "food_type": "Generic",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-roasted-broiled-or-baked"
+          },
+          {
+            "brand_name": "Tyson Foods",
+            "food_description": "Per 1 serving - Calories: 190kcal | Fat: 5.00g | Carbs: 0.00g | Protein: 37.00g",
+            "food_id": "48833",
+            "food_name": "Boneless Skinless Chicken Breasts",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/tyson-foods/boneless-skinless-chicken-breasts"
+          },
+          {
+            "food_description": "Per 101g - Calories: 165kcal | Fat: 3.57g | Carbs: 0.00g | Protein: 31.02g",
+            "food_id": "1646",
+            "food_name": "Roasted Broiled or Baked Chicken Breast (Skin Not Eaten)",
+            "food_type": "Generic",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-roasted-broiled-or-baked-skin-not-eaten"
+          },
+          {
+            "brand_name": "Perdue",
+            "food_description": "Per 3 oz  - Calories: 100kcal | Fat: 2.00g | Carbs: 1.00g | Protein: 20.00g",
+            "food_id": "49396",
+            "food_name": "Grilled Chicken Breast Strips",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/perdue/grilled-chicken-breast-strips"
+          },
+          {
+            "brand_name": "Wal-Mart",
+            "food_description": "Per 1 serving - Calories: 110kcal | Fat: 2.50g | Carbs: 0.00g | Protein: 23.00g",
+            "food_id": "4718517",
+            "food_name": "Boneless Skinless Chicken Breast",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/wal-mart/boneless-skinless-chicken-breast"
+          },
+          {
+            "brand_name": "Sanderson Farms",
+            "food_description": "Per 4 oz - Calories: 150kcal | Fat: 3.00g | Carbs: 0.00g | Protein: 27.00g",
+            "food_id": "6697691",
+            "food_name": "Boneless Skinless Chicken Breast",
+            "food_type": "Brand",
+            "food_url": "https://foods.fatsecret.com/calories-nutrition/sanderson-farms/boneless-skinless-chicken-breast"
+          }
+        ],
+        "max_results": "10",
+        "page_number": "0",
+        "total_results": "1564"
+      }
+    }
+  }
+}

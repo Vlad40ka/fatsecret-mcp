@@ -1,0 +1,24 @@
+{
+  "description": "Food Entries requested with an access token FatSecret doesn't know (stands in for a revoked one).",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food_entries.get.v2",
+      "format": "json",
+      "date": "20739"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "error": {
+        "code": 9,
+        "message": "Invalid access token: please check your oauth_token"
+      }
+    }
+  }
+}

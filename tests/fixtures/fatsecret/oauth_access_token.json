@@ -1,0 +1,15 @@
+{
+  "description": "PIN flow step 3: exchange the authorized request token and PIN (oauth_verifier). Response is form-encoded.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://authentication.fatsecret.com/oauth/access_token",
+    "params": {}
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "text": "oauth_token=ACCESS_TOKEN&oauth_token_secret=ACCESS_TOKEN_SECRET"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "description": "RECONSTRUCTED, not recorded: can't be triggered safely. Daily API quota exhausted (error 11). The details text inside the quotes is a guess. Status and code type copied from a recorded error.",
+  "source": "reconstructed",
+  "reconstructed_from": "https://platform.fatsecret.com/docs/guides/error-codes",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.search",
+      "search_expression": "apple",
+      "format": "json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "error": {
+        "code": 11,
+        "message": "Application request limit reached: 'Daily limit exceeded'"
+      }
+    }
+  }
+}

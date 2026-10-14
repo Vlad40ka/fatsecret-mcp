@@ -1,0 +1,15 @@
+{
+  "description": "PIN flow step 1: request token with oauth_callback=oob. Response is form-encoded.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://authentication.fatsecret.com/oauth/request_token",
+    "params": {}
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "text": "oauth_callback_confirmed=true&oauth_token=REQUEST_TOKEN&oauth_token_secret=REQUEST_TOKEN_SECRET"
+  }
+}

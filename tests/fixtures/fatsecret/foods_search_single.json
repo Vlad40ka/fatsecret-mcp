@@ -1,0 +1,33 @@
+{
+  "description": "Catalog search with exactly one result: 'food' is an object, not a list.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.search",
+      "format": "json",
+      "search_expression": "chicken breast",
+      "max_results": "1"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "foods": {
+        "food": {
+          "food_description": "Per 101g - Calories: 197kcal | Fat: 7.79g | Carbs: 0.00g | Protein: 29.80g",
+          "food_id": "1641",
+          "food_name": "Chicken Breast",
+          "food_type": "Generic",
+          "food_url": "https://foods.fatsecret.com/calories-nutrition/generic/chicken-breast-ns-as-to-skin-eaten"
+        },
+        "max_results": "1",
+        "page_number": "0",
+        "total_results": "1564"
+      }
+    }
+  }
+}

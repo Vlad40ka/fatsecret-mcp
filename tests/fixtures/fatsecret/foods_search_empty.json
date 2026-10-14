@@ -1,0 +1,25 @@
+{
+  "description": "Catalog search with no results.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.search",
+      "format": "json",
+      "search_expression": "qqzxvjkw"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "foods": {
+        "max_results": "20",
+        "page_number": "0",
+        "total_results": "0"
+      }
+    }
+  }
+}

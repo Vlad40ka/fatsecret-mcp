@@ -1,0 +1,24 @@
+{
+  "description": "Catalog search signed with the wrong consumer secret.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "foods.search",
+      "search_expression": "apple",
+      "format": "json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "error": {
+        "code": 8,
+        "message": "Invalid signature: please refer to the documentation"
+      }
+    }
+  }
+}

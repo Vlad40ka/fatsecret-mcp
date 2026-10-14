@@ -1,0 +1,42 @@
+{
+  "description": "Food Entries for a Diary Day with one test entry.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food_entries.get.v2",
+      "format": "json",
+      "date": "16448"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "food_entries": {
+        "food_entry": [
+          {
+            "calories": "74",
+            "carbohydrate": "9.20",
+            "date_int": "16448",
+            "fat": "1.30",
+            "fiber": "0",
+            "food_entry_description": "1 serving Skyr Waniliowy",
+            "food_entry_id": "9000004",
+            "food_entry_name": "Skyr Waniliowy",
+            "food_id": "51467582",
+            "meal": "Breakfast",
+            "number_of_units": "1.000",
+            "protein": "6.40",
+            "saturated_fat": "0.900",
+            "serving_id": "43596665",
+            "sodium": "40",
+            "sugar": "3.30"
+          }
+        ]
+      }
+    }
+  }
+}

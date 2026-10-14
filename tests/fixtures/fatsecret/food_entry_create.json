@@ -1,0 +1,28 @@
+{
+  "description": "food_entry.create for a Polish Brand Food that the US catalog doesn't return, 2 units. food_id and serving_id come from the User's own Food Diary.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "POST",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food_entry.create",
+      "format": "json",
+      "food_id": "51467582",
+      "food_entry_name": "Skyr Waniliowy",
+      "serving_id": "43596665",
+      "number_of_units": "2",
+      "meal": "lunch",
+      "date": "16447"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "food_entry_id": {
+        "value": "9000001"
+      }
+    }
+  }
+}

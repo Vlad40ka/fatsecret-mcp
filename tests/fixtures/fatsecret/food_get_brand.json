@@ -1,0 +1,80 @@
+{
+  "description": "food.get v5 for a US Brand Food. v5 adds a derived Serving with serving_id 0, which food_entry.create doesn't accept.",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://platform.fatsecret.com/rest/server.api",
+    "params": {
+      "method": "food.get.v5",
+      "format": "json",
+      "food_id": "5673332"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "json": {
+      "food": {
+        "food_id": "5673332",
+        "food_name": "Chicken Breast",
+        "brand_name": "Kirkland Signature",
+        "food_type": "Brand",
+        "food_url": "https://foods.fatsecret.com/calories-nutrition/kirkland-signature/chicken-breast",
+        "servings": {
+          "serving": [
+            {
+              "serving_id": "5509656",
+              "serving_description": "4 oz",
+              "serving_url": "https://foods.fatsecret.com/calories-nutrition/kirkland-signature/chicken-breast",
+              "metric_serving_amount": "112.000",
+              "metric_serving_unit": "g",
+              "number_of_units": "1.000",
+              "measurement_description": "serving",
+              "calories": "110",
+              "carbohydrate": "0",
+              "protein": "20.00",
+              "fat": "1.50",
+              "saturated_fat": "0",
+              "polyunsaturated_fat": "0",
+              "monounsaturated_fat": "0",
+              "trans_fat": "0",
+              "cholesterol": "55",
+              "sodium": "300",
+              "potassium": "410",
+              "fiber": "0",
+              "sugar": "0",
+              "added_sugars": "0",
+              "vitamin_d": "0",
+              "iron": "0.40"
+            },
+            {
+              "serving_id": "0",
+              "serving_description": "100 g",
+              "metric_serving_amount": "100.0",
+              "metric_serving_unit": "g",
+              "number_of_units": "100.0",
+              "measurement_description": "g",
+              "calories": "98",
+              "carbohydrate": "0",
+              "protein": "17.86",
+              "fat": "1.34",
+              "saturated_fat": "0",
+              "polyunsaturated_fat": "0",
+              "monounsaturated_fat": "0",
+              "trans_fat": "0",
+              "cholesterol": "49",
+              "sodium": "268",
+              "potassium": "366",
+              "fiber": "0",
+              "sugar": "0",
+              "added_sugars": "0",
+              "vitamin_d": "0",
+              "iron": "0.36"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

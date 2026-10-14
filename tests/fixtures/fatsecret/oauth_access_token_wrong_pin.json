@@ -1,0 +1,15 @@
+{
+  "description": "PIN flow step 3 with a PIN the User never saw (request token not authorized).",
+  "source": "recorded",
+  "recorded_on": "2026-10-13",
+  "request": {
+    "http_method": "GET",
+    "url": "https://authentication.fatsecret.com/oauth/access_token",
+    "params": {}
+  },
+  "response": {
+    "status": 400,
+    "content_type": "text/html; charset=utf-8",
+    "text": "Invalid / expired Token: REQUEST_TOKEN"
+  }
+}
