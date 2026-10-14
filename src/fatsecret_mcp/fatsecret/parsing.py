@@ -46,6 +46,28 @@ def food_entries(body: dict[str, Any]) -> list[FoodEntry]:
     return [_food_entry(raw) for raw in raw_entries]
 
 
+def month_totals(body: dict[str, Any]) -> dict[date, Nutrition]:
+    """Per-day totals in a `food_entries.get_month.v2` response, including retained all-zero days."""
+    month = _object(body, "month")
+    raw_days = _as_list(month.get("day"))
+    totals: dict[date, Nutrition] = {}
+
+    for raw in raw_days:
+        try:
+            day = EPOCH + timedelta(days=int(_text(raw, "date_int")))
+        except (ValueError, OverflowError):
+            raise UpstreamFailure("an invalid Diary Day") from None
+
+        totals[day] = Nutrition(
+            kcal=_number(raw, "calories", default=0),
+            protein=_number(raw, "protein", default=0),
+            fat=_number(raw, "fat", default=0),
+            carbohydrate=_number(raw, "carbohydrate", default=0),
+        )
+
+    return totals
+
+
 def _food_entry(raw: dict[str, Any]) -> FoodEntry:
     name = _text(raw, "food_entry_name")
 

@@ -3,4 +3,5 @@
 - `models`: the concepts as data.
 - `diary_day`: which Diary Day it is for a User.
 - `day_summary`: one Diary Day at a glance.
+- `period_summary`: daily totals and Daily Targets across a bounded period.
 """

@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import httpx2
 
-from fatsecret_mcp.domain.models import FoodEntry
+from fatsecret_mcp.domain.models import FoodEntry, Nutrition
 from fatsecret_mcp.fatsecret import errors, parsing
 from fatsecret_mcp.fatsecret.errors import FatSecretError, UpstreamFailure
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
@@ -37,6 +37,14 @@ class FatSecretApi:
         body = await self._call("food_entries.get.v2", {"date": str(parsing.day_number(day))}, user)
 
         return parsing.food_entries(body)
+
+    async def get_month_totals(self, user: AccessToken, month: date) -> dict[date, Nutrition]:
+        first_day = month.replace(day=1)
+        body = await self._call(
+            "food_entries.get_month.v2", {"date": str(parsing.day_number(first_day))}, user
+        )
+
+        return parsing.month_totals(body)
 
     async def _call(self, method: str, params: Mapping[str, str], user: AccessToken | None) -> dict[str, Any]:
         url = signed_url("GET", API_URL, {"method": method, "format": "json", **params}, self._consumer, user)

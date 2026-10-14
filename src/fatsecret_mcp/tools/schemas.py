@@ -11,7 +11,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from fatsecret_mcp.domain.models import DaySummary, FoodEntry, Meal, Nutrition
+from fatsecret_mcp.domain.models import DaySummary, FoodEntry, Meal, Nutrition, PeriodDaySummary
 
 # --- Inputs ----------------------------------------------------------------
 
@@ -19,6 +19,9 @@ DiaryDayOrToday = Annotated[
     date | None,
     Field(description="The Diary Day, as YYYY-MM-DD. Omit for today in the User's timezone."),
 ]
+
+PeriodStart = Annotated[date, Field(description="First Diary Day in the period, inclusive, as YYYY-MM-DD.")]
+PeriodEnd = Annotated[date, Field(description="Last Diary Day in the period, inclusive, as YYYY-MM-DD.")]
 
 
 # --- Results ---------------------------------------------------------------
@@ -93,6 +96,28 @@ class DiaryDay(BaseModel):
             daily_targets=Amounts.of(summary.daily_targets),
             remaining=Amounts.of(summary.remaining),
         )
+
+
+class PeriodDay(BaseModel):
+    diary_day: date
+    has_food_entries: bool = Field(description="False when the Diary Day has no Food Entries.")
+    totals: Amounts
+    daily_targets: Amounts
+
+    @classmethod
+    def of(cls, summary: PeriodDaySummary) -> PeriodDay:
+        return cls(
+            diary_day=summary.diary_day,
+            has_food_entries=summary.has_food_entries,
+            totals=Amounts.of(summary.totals),
+            daily_targets=Amounts.of(summary.daily_targets),
+        )
+
+
+class PeriodSummary(BaseModel):
+    from_day: date
+    to_day: date
+    days: list[PeriodDay] = Field(description="Every Diary Day in the period, in chronological order.")
 
 
 def _rounded(grams: float) -> float:

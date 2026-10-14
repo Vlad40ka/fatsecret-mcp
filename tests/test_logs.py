@@ -16,12 +16,20 @@ from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret
 pytestmark = pytest.mark.anyio
 
 SECRETS = [CONSUMER.key, CONSUMER.secret, USER.token, USER.secret]
-NUTRITION = ["Skyr Waniliowy", "Chicken Breast", "18.4", "39.89", "11.58"]
+NUTRITION = ["Skyr Waniliowy", "Chicken Breast", "18.4", "39.89", "11.58", "97.01", "24.6"]
 
 
-@pytest.mark.parametrize("recorded", ["food_entries_get.json", "error_invalid_access_token.json"])
-async def test_a_get_diary_day_call_logs_no_secrets_and_no_nutrition(
-    recorded: str, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("tool", "recorded"),
+    [
+        ("get_diary_day", "food_entries_get.json"),
+        ("get_diary_day", "error_invalid_access_token.json"),
+        ("get_period_summary", "food_entries_get_month.json"),
+        ("get_period_summary", "error_invalid_access_token.json"),
+    ],
+)
+async def test_a_diary_tool_call_logs_no_secrets_and_no_nutrition(
+    tool: str, recorded: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
     household = load_household(
@@ -49,7 +57,13 @@ async def test_a_get_diary_day_call_logs_no_secrets_and_no_nutrition(
         server = build_server(household.user("jakub"), FatSecretApi(household.consumer, http))
 
         async with Client(server) as client:
-            await client.call_tool("get_diary_day", {"diary_day": "2015-01-12"})
+            arguments = (
+                {"diary_day": "2015-01-12"}
+                if tool == "get_diary_day"
+                else {"from_day": "2015-01-12", "to_day": "2015-01-13"}
+            )
+
+            await client.call_tool(tool, arguments)
 
     assert caplog.records, "expected the call to log something, or this test proves nothing"
     for leak in SECRETS + NUTRITION:

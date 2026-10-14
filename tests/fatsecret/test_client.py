@@ -7,6 +7,7 @@ from datetime import date
 import httpx2
 import pytest
 
+from fatsecret_mcp.domain.models import Nutrition
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import (
     CredentialsRejected,
@@ -35,16 +36,20 @@ DAY = date(2026, 10, 13)
         ("error_invalid_signature.json", CredentialsRejected),
     ],
 )
+@pytest.mark.parametrize("operation", ["food_entries", "month_totals"])
 async def test_fatsecret_errors_map_to_domain_errors(
-    recorded_error: str, domain_error: type[FatSecretError]
+    recorded_error: str, domain_error: type[FatSecretError], operation: str
 ) -> None:
     recorded = RecordedFatSecret()
 
     recorded.answer_everything_with(recorded_error)
 
     async with recorded.client() as http:
+        gateway = FatSecretApi(CONSUMER, http)
+        call = gateway.list_food_entries if operation == "food_entries" else gateway.get_month_totals
+
         with pytest.raises(domain_error) as raised:
-            await FatSecretApi(CONSUMER, http).list_food_entries(USER, DAY)
+            await call(USER, DAY)
 
     assert raised.value.code == fixture(recorded_error)["response"]["json"]["error"]["code"]
 
@@ -130,3 +135,38 @@ async def test_the_amount_is_shown_as_the_fatsecret_app_shows_it(description: st
         [entry] = await FatSecretApi(CONSUMER, http).list_food_entries(USER, date(2015, 1, 13))
 
     assert entry.amount == amount
+
+
+async def test_a_single_month_day_sent_as_a_bare_object_is_still_listed() -> None:
+    # A derived variant of the recorded list checks FatSecret's singleton-object response shape.
+    exchange = fixture("food_entries_get_month.json")
+    month = exchange["response"]["json"]["month"]
+    month["day"] = month["day"][1]
+    recorded = RecordedFatSecret()
+
+    recorded.serve(exchange)
+
+    async with recorded.client() as http:
+        totals = await FatSecretApi(CONSUMER, http).get_month_totals(USER, date(2015, 1, 1))
+
+    assert totals == {
+        date(2015, 1, 13): Nutrition(
+            kcal=74,
+            protein=6.4,
+            fat=1.3,
+            carbohydrate=9.2,
+        ),
+    }
+
+
+@pytest.mark.parametrize("bad_day", ["not-a-day", "9999999999999999999999"])
+async def test_invalid_month_diary_days_become_upstream_failures(bad_day: str) -> None:
+    exchange = fixture("food_entries_get_month.json")
+    exchange["response"]["json"]["month"]["day"][0]["date_int"] = bad_day
+    recorded = RecordedFatSecret()
+
+    recorded.serve(exchange)
+
+    async with recorded.client() as http:
+        with pytest.raises(UpstreamFailure):
+            await FatSecretApi(CONSUMER, http).get_month_totals(USER, date(2015, 1, 1))

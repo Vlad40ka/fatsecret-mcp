@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
-from fatsecret_mcp.domain.models import FoodEntry
+from fatsecret_mcp.domain.models import FoodEntry, Nutrition
 
 
 @dataclass(frozen=True)
@@ -31,4 +31,12 @@ class AccessToken:
 class FatSecretGateway(Protocol):
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
         """The User's Food Entries for one Diary Day; an empty list when there are none."""
+        ...
+
+    async def get_month_totals(self, user: AccessToken, month: date) -> dict[date, Nutrition]:
+        """Per-day totals for the calendar month containing `month`.
+
+        Missing days have no Food Entries. All-zero days may also have no Food Entries after deletion;
+        use `list_food_entries` to distinguish those from entries with zero nutrition.
+        """
         ...

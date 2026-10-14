@@ -67,3 +67,11 @@ class DaySummary:
     daily_targets: Nutrition
     remaining: Nutrition
     """Daily Targets minus totals; negative once a target is exceeded."""
+
+
+@dataclass(frozen=True)
+class PeriodDaySummary:
+    diary_day: date
+    has_food_entries: bool
+    totals: Nutrition
+    daily_targets: Nutrition

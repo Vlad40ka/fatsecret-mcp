@@ -16,7 +16,7 @@ from fatsecret_mcp.domain.models import FoodEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import InvalidAccessToken
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
-from tests.fatsecret.fake import FakeFatSecret
+from tests.fatsecret.fake import FakeFatSecret, food_entry
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret
 
 pytestmark = pytest.mark.anyio
@@ -91,6 +91,7 @@ class World(Protocol):
     def gateway(self) -> FatSecretGateway: ...
 
     def given_recorded_diary_day(self, day: date) -> None: ...
+    def given_recorded_month(self, scenario: str) -> None: ...
     def given_revoked_access_token(self) -> None: ...
 
 
@@ -108,6 +109,18 @@ class FakeWorld:
     def given_revoked_access_token(self) -> None:
         self.fake.revoke(USER)
 
+    def given_recorded_month(self, scenario: str) -> None:
+        if scenario != "empty":
+            self.given_recorded_diary_day(THREE_MEALS_DAY)
+            self.given_recorded_diary_day(ONE_ENTRY_DAY)
+
+        if scenario == "single":
+            self.fake.delete_food_entries(USER, THREE_MEALS_DAY)
+
+        self.fake.add_food_entry(
+            USER, food_entry("Outside the month", Meal.LUNCH, date(2015, 2, 1), kcal=500)
+        )
+
 
 class RecordedWorld:
     def __init__(self, recorded: RecordedFatSecret, gateway: FatSecretApi) -> None:
@@ -118,7 +131,12 @@ class RecordedWorld:
         self.recorded.serve(RECORDED_FIXTURES[day])
 
     def given_revoked_access_token(self) -> None:
-        self.recorded.serve("error_invalid_access_token.json")
+        self.recorded.answer_everything_with("error_invalid_access_token.json")
+
+    def given_recorded_month(self, scenario: str) -> None:
+        suffix = "" if scenario == "full" else f"_{scenario}"
+
+        self.recorded.serve(f"food_entries_get_month{suffix}.json")
 
 
 @pytest.fixture(params=["fake", "fatsecret_api"])
@@ -146,3 +164,39 @@ async def test_a_revoked_access_token_is_rejected(world: World) -> None:
 
     with pytest.raises(InvalidAccessToken):
         await world.gateway.list_food_entries(USER, REVOKED_TOKEN_DAY)
+
+
+@pytest.mark.parametrize("scenario", ["full", "single", "empty"])
+async def test_month_totals_include_only_the_requested_month(world: World, scenario: str) -> None:
+    world.given_recorded_month(scenario)
+
+    totals = await world.gateway.get_month_totals(USER, date(2015, 1, 20))
+
+    if scenario == "empty":
+        assert totals == {}
+        return
+
+    assert set(totals) == {THREE_MEALS_DAY, ONE_ENTRY_DAY}
+    assert totals[ONE_ENTRY_DAY] == Nutrition(
+        kcal=74,
+        protein=6.4,
+        fat=1.3,
+        carbohydrate=9.2,
+    )
+
+    first_day = totals[THREE_MEALS_DAY]
+
+    if scenario == "single":
+        assert first_day == Nutrition()
+    else:
+        assert first_day.kcal == 704
+        assert first_day.protein == pytest.approx(97.01)
+        assert first_day.fat == pytest.approx(24.6)
+        assert first_day.carbohydrate == pytest.approx(18.4)
+
+
+async def test_month_totals_reject_a_revoked_access_token(world: World) -> None:
+    world.given_revoked_access_token()
+
+    with pytest.raises(InvalidAccessToken):
+        await world.gateway.get_month_totals(USER, REVOKED_TOKEN_DAY)
