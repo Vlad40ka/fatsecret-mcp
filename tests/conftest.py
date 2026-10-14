@@ -75,6 +75,8 @@ def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) ->
     """An in-memory MCP client session with the real server, acting as one User of the Household."""
 
     def connect(user_id: str) -> Client:
-        return Client(build_server(household.user(user_id), fatsecret, clock))
+        server = build_server(household.user(user_id), fatsecret, clock, household.recent_food_days)
+
+        return Client(server)
 
     return connect

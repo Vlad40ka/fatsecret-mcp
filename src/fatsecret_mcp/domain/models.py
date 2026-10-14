@@ -82,6 +82,21 @@ class Food(CatalogFood):
 
 
 @dataclass(frozen=True)
+class RecentFood:
+    """A Food the User logged in recent weeks, under the name it was logged with.
+
+    A Stand-in shares its Food with real Food Entries of that Food, but it's a Recent Food of its own.
+    """
+
+    food_id: str
+    name: str
+    servings: list[Serving]
+    """Only the Servings the User logged it with, each as last logged: amount, units and nutrition."""
+    times_logged: int
+    last_logged: date
+
+
+@dataclass(frozen=True)
 class DaySummary:
     diary_day: date
     meals: dict[Meal, list[FoodEntry]]

@@ -24,6 +24,8 @@ FATSECRET_MCP_USERS='[{"id": "me", "display_name": "Me", "fatsecret_access_token
 
 `FATSECRET_MCP_USERS` lists everyone the server serves. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as.
 
+Food search looks through what you logged in the last 14 days before the FatSecret catalog. To change that, set `FATSECRET_MCP_RECENT_FOOD_DAYS` (1 to 31). Each day costs one FatSecret API call per search.
+
 Then add the server to Claude Code:
 
 ```sh

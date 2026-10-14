@@ -1,10 +1,15 @@
-"""An in-memory FatSecret: a shared catalog and one Food Diary per FatSecret account."""
+"""An in-memory FatSecret: a shared catalog and one Food Diary per FatSecret account.
+
+Every call is counted and, like a network call, gives way to other calls while it's in flight.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date
 from itertools import count
+
+import anyio.lowlevel
 
 from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret.errors import CredentialsRejected, FatSecretError, InvalidAccessToken, NotFound
@@ -19,6 +24,11 @@ class FakeFatSecret:
         self._failure: FatSecretError | None = None
         self._catalog: dict[str, Food] = {}
         self._search_results: dict[str, list[CatalogFood]] = {}
+        self._in_flight = 0
+        self.requests = 0
+        """How many calls FatSecret has answered."""
+        self.most_in_flight = 0
+        """The most calls that were in flight at the same time."""
 
     def add_food(self, food: Food) -> None:
         self._catalog[food.id] = food
@@ -27,12 +37,16 @@ class FakeFatSecret:
         self._search_results[query] = list(foods)
 
     async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
+        await self._request()
+
         if self._failure is not None:
             raise self._failure
 
         return self._search_results.get(query, [])[: max_results or 20]
 
     async def get_food(self, food_id: str) -> Food:
+        await self._request()
+
         if self._failure is not None:
             raise self._failure
 
@@ -64,10 +78,12 @@ class FakeFatSecret:
         self._failure = error
 
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
+        await self._request()
         self._authenticate(user)
         return [entry for entry in self._diaries[user.token] if entry.diary_day == day]
 
     async def get_month_totals(self, user: AccessToken, month: date) -> dict[date, Nutrition]:
+        await self._request()
         self._authenticate(user)
 
         first_day = month.replace(day=1)
@@ -82,6 +98,15 @@ class FakeFatSecret:
                 totals[entry.diary_day] = totals.get(entry.diary_day, Nutrition()) + entry.nutrition
 
         return totals
+
+    async def _request(self) -> None:
+        self.requests += 1
+        self._in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self._in_flight)
+
+        await anyio.lowlevel.checkpoint()
+
+        self._in_flight -= 1
 
     def _authenticate(self, user: AccessToken) -> None:
         if self._failure is not None:
@@ -107,17 +132,20 @@ def food_entry(
     fat: float = 0,
     carbohydrate: float = 0,
     amount: str = "1 serving",
+    food_id: str | None = None,
+    serving_id: str | None = None,
+    number_of_units: float = 1,
 ) -> FoodEntry:
-    """A Food Entry with the details the tools don't look at filled in."""
+    """A Food Entry with the details a test doesn't name filled in, in a Food and Serving of its own."""
     entry_id = next(_ids)
 
     return FoodEntry(
         id=str(entry_id),
-        food_id=f"food-{entry_id}",
-        serving_id=f"serving-{entry_id}",
+        food_id=food_id or f"food-{entry_id}",
+        serving_id=serving_id or f"serving-{entry_id}",
         name=name,
         amount=amount,
-        number_of_units=1,
+        number_of_units=number_of_units,
         meal=meal,
         diary_day=diary_day,
         nutrition=Nutrition(kcal=kcal, protein=protein, fat=fat, carbohydrate=carbohydrate),

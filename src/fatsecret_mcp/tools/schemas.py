@@ -1,7 +1,8 @@
 """The shapes of the tools' inputs and results, as Claude sees them.
 
 The MCP SDK publishes them as each tool's input and output schema. Diary totals are rounded for
-reading; catalog Servings retain their precision. The `of` methods turn domain objects into these shapes.
+reading; the Servings search_foods finds retain their precision. The `of` methods turn domain objects
+into these shapes.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from fatsecret_mcp.domain.models import (
     Meal,
     Nutrition,
     PeriodDaySummary,
+    RecentFood,
     Serving,
 )
 
@@ -165,19 +167,37 @@ class FoodServing(BaseModel):
 
 
 class FoodMatch(BaseModel):
-    source: Literal["catalog"] = "catalog"
+    source: Literal["recent_foods", "catalog"] = Field(
+        description="recent_foods: logged by the User in recent weeks; catalog: FatSecret's catalog."
+    )
     food_id: str
-    name: str
+    name: str = Field(description="For a Recent Food, the name it was logged with.")
     brand: str | None
     servings: list[FoodServing] = Field(
-        description="Loggable Servings, with kcal and Macros per described Serving."
+        description=(
+            "Loggable Servings, with kcal and Macros per described Serving. "
+            "A Recent Food's are the ones the User logged it with, each as last logged."
+        )
     )
 
     @classmethod
-    def of(cls, food: Food, servings: list[Serving]) -> FoodMatch:
+    def of_recent_food(cls, food: RecentFood) -> FoodMatch:
+        food_servings = [FoodServing.of(serving) for serving in food.servings]
+
+        return cls(
+            source="recent_foods",
+            food_id=food.food_id,
+            name=food.name,
+            brand=None,
+            servings=food_servings,
+        )
+
+    @classmethod
+    def of_catalog_food(cls, food: Food, servings: list[Serving]) -> FoodMatch:
         food_servings = [FoodServing.of(serving) for serving in servings]
 
         return cls(
+            source="catalog",
             food_id=food.id,
             name=food.name,
             brand=food.brand,

@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, date, datetime
 
 import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.fatsecret.client import FatSecretApi
+from fatsecret_mcp.fatsecret.parsing import day_number
 from fatsecret_mcp.server import build_server
+from tests.conftest import FakeClock
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
 
 pytestmark = pytest.mark.anyio
 
 SECRETS = [CONSUMER.key, CONSUMER.secret, USER.token, USER.secret]
 NUTRITION = ["Skyr Waniliowy", "Chicken Breast", "18.4", "39.89", "11.58", "97.01", "24.6"]
+
+# Noon in Warsaw on the last recorded test Diary Day.
+CLOCK = FakeClock(datetime(2015, 1, 14, 11, 0, tzinfo=UTC))
 
 
 @pytest.mark.parametrize(
@@ -58,13 +64,14 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
         exchange = fixture(recorded)
         exchange["request"]["params"]["max_results"] = "5"
 
+        serve_recent_diary_days(fatsecret)
         fatsecret.serve(exchange)
         fatsecret.serve("food_get_generic.json")
     else:
         fatsecret.answer_everything_with(recorded)
 
     async with fatsecret.client() as http:
-        server = build_server(household.user("jakub"), FatSecretApi(household.consumer, http))
+        server = build_server(household.user("jakub"), FatSecretApi(household.consumer, http), CLOCK)
 
         async with Client(server) as client:
             arguments = {
@@ -80,3 +87,16 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     assert caplog.records, "expected the call to log something, or this test proves nothing"
     for leak in SECRETS + NUTRITION:
         assert leak not in caplog.text
+
+
+def serve_recent_diary_days(fatsecret: RecordedFatSecret) -> None:
+    """The 14 Diary Days up to CLOCK's: the recorded test days, 2015-01-12 to 14, after empty ones."""
+    fatsecret.serve("food_entries_get.json")
+    fatsecret.serve("food_entries_get_single.json")
+    fatsecret.serve("food_entries_get_empty.json")
+
+    for day in range(1, 12):
+        exchange = fixture("food_entries_get_empty.json")
+        exchange["request"]["params"]["date"] = str(day_number(date(2015, 1, day)))
+
+        fatsecret.serve(exchange)
