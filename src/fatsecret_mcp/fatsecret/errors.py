@@ -44,6 +44,16 @@ class IpAddressRejected(FatSecretError):
         )
 
 
+class TooManyActions(FatSecretError):
+    code = 12
+
+    def __init__(self) -> None:
+        super().__init__(
+            "FatSecret is temporarily limiting requests because too many actions were made "
+            "in a short time (error 12). Wait a moment before trying again."
+        )
+
+
 class NotFound(FatSecretError):
     code = 106
 
@@ -81,6 +91,8 @@ def from_code(code: int) -> FatSecretError:
         return InvalidAccessToken()
     if code == 11:
         return DailyQuotaExceeded()
+    if code == 12:
+        return TooManyActions()
     if code == 21:
         return IpAddressRejected()
     if code == 106:

@@ -16,6 +16,7 @@ from fatsecret_mcp.fatsecret.errors import (
     InvalidAccessToken,
     IpAddressRejected,
     NotFound,
+    TooManyActions,
     UpstreamFailure,
 )
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
@@ -23,6 +24,21 @@ from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
 pytestmark = pytest.mark.anyio
 
 DAY = date(2026, 10, 13)
+
+
+async def test_error_12_reports_temporary_throttling_without_exposing_the_upstream_message() -> None:
+    response = httpx2.Response(
+        200,
+        json={"error": {"code": 12, "message": "User is performing too many actions: secret-token"}},
+    )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _: response)) as http:
+        with pytest.raises(TooManyActions) as raised:
+            await FatSecretApi(CONSUMER, http).list_food_entries(USER, DAY)
+
+    assert raised.value.code == 12
+    assert "Wait a moment" in str(raised.value)
+    assert "secret-token" not in str(raised.value)
 
 
 @pytest.mark.parametrize(

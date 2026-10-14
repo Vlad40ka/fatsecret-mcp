@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 
 from fatsecret_mcp.domain.models import DaySummary, FoodEntry, Meal, Nutrition
 
 
 def summarize_day(diary_day: date, entries: list[FoodEntry], daily_targets: Nutrition) -> DaySummary:
-    totals = sum((entry.nutrition for entry in entries), Nutrition())
+    totals = total_nutrition(entries)
 
     return DaySummary(
         diary_day=diary_day,
@@ -17,6 +18,12 @@ def summarize_day(diary_day: date, entries: list[FoodEntry], daily_targets: Nutr
         daily_targets=daily_targets,
         remaining=daily_targets - totals,
     )
+
+
+def total_nutrition(entries: Sequence[FoodEntry]) -> Nutrition:
+    nutrition = [entry.nutrition for entry in entries]
+
+    return sum(nutrition, Nutrition())
 
 
 def _by_meal(entries: list[FoodEntry]) -> dict[Meal, list[FoodEntry]]:

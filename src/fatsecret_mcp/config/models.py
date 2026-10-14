@@ -86,7 +86,7 @@ class Household(ConfigModel):
     consumer_secret: SecretStr
     users: tuple[User, ...]
     recent_food_days: Annotated[int, Field(ge=1, le=MAX_RECENT_FOOD_DAYS)] = DEFAULT_RECENT_FOOD_DAYS
-    """How many Diary Days, up to today, Recent Foods are gathered from. Each costs a FatSecret call."""
+    """How many Diary Days, up to today, Recent Foods come from. Each uncached day costs an API call."""
 
     @property
     def consumer(self) -> ConsumerKey:

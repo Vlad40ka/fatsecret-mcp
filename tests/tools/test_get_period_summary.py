@@ -12,6 +12,7 @@ from mcp import Client
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import Meal
 from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken
+from tests.conftest import FakeClock
 from tests.fatsecret.fake import FakeFatSecret, food_entry
 
 pytestmark = pytest.mark.anyio
@@ -28,6 +29,169 @@ async def get_period(client: Client, from_day: str, to_day: str) -> dict[str, An
     assert not result.is_error, result.content
     assert result.structured_content is not None
     return result.structured_content
+
+
+async def test_a_cached_history_answers_a_period_question_without_more_requests(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+    yesterday = DAY - timedelta(days=1)
+    water_day = DAY - timedelta(days=2)
+    deleted_day = DAY - timedelta(days=3)
+
+    fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=200))
+    fatsecret.add_food_entry(user, food_entry("Water", Meal.SNACKS, water_day, kcal=0))
+    fatsecret.add_food_entry(user, food_entry("Deleted", Meal.SNACKS, deleted_day, kcal=300))
+    fatsecret.delete_food_entries(user, deleted_day)
+    fatsecret.limit_requests_to(15)
+
+    async with connect("jakub") as client:
+        search = await client.call_tool("search_foods", {"description": "skyr"})
+        period = await get_period(client, "2026-10-01", yesterday.isoformat())
+
+    assert not search.is_error
+    assert [day["has_food_entries"] for day in period["days"]] == [False] * 11 + [True, True]
+    assert [day["totals"]["kcal"] for day in period["days"]] == [0] * 12 + [200]
+    assert fatsecret.requests == 15
+
+
+async def test_a_mixed_period_reuses_cached_days_and_fetches_only_the_missing_month(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+
+    for day, kcal in ((date(2026, 9, 29), 100), (date(2026, 9, 30), 200), (date(2026, 10, 1), 300)):
+        fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, day, kcal=kcal))
+
+    fatsecret.limit_requests_to(3)
+
+    async with connect("jakub") as client:
+        for day in ("2026-09-29", "2026-09-30"):
+            result = await client.call_tool("get_diary_day", {"diary_day": day})
+
+            assert not result.is_error
+
+        fatsecret.delete_food_entries(user, date(2026, 9, 30))
+        period = await get_period(client, "2026-09-29", "2026-10-01")
+
+    assert [day["totals"]["kcal"] for day in period["days"]] == [100, 200, 300]
+    assert fatsecret.requests == 3
+
+
+async def test_a_cached_past_day_and_today_use_history_and_fresh_totals_together(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+    yesterday = DAY - timedelta(days=1)
+
+    fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=100))
+
+    async with connect("jakub") as client:
+        await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+        first = await get_period(client, yesterday.isoformat(), DAY.isoformat())
+
+        fatsecret.add_food_entry(user, food_entry("Lunch", Meal.LUNCH, DAY, kcal=500))
+        second = await get_period(client, yesterday.isoformat(), DAY.isoformat())
+
+    assert [day["totals"]["kcal"] for day in first["days"]] == [100, 0]
+    assert [day["totals"]["kcal"] for day in second["days"]] == [100, 500]
+    assert fatsecret.requests == 3
+
+
+async def test_refreshing_a_period_discards_its_stale_entries_for_subsequent_day_questions(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+    yesterday = DAY - timedelta(days=1)
+
+    fatsecret.add_food_entry(user, food_entry("Pizza", Meal.DINNER, yesterday, kcal=900))
+
+    async with connect("jakub") as client:
+        await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+
+        fatsecret.delete_food_entries(user, yesterday)
+        fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=100))
+        cached = await get_period(client, yesterday.isoformat(), yesterday.isoformat())
+        refreshed = await client.call_tool(
+            "get_period_summary",
+            {"from_day": yesterday.isoformat(), "to_day": yesterday.isoformat(), "refresh": True},
+        )
+        day = await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+
+    assert cached["days"][0]["totals"]["kcal"] == 900
+    assert not refreshed.is_error
+    assert refreshed.structured_content is not None
+    assert refreshed.structured_content["days"][0]["totals"]["kcal"] == 100
+    assert not day.is_error
+    assert day.structured_content is not None
+    assert day.structured_content["totals"]["kcal"] == 100
+    assert fatsecret.requests == 3
+
+
+async def test_an_expired_period_uses_fresh_month_totals_even_after_an_intermediate_cached_report(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household, clock: FakeClock
+) -> None:
+    user = household.user("jakub").fatsecret
+    yesterday = DAY - timedelta(days=1)
+
+    fatsecret.add_food_entry(user, food_entry("Skyr Stary", Meal.SNACKS, yesterday, kcal=100))
+
+    async with connect("jakub") as client:
+        await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+        clock.now += timedelta(hours=6)
+
+        fatsecret.delete_food_entries(user, yesterday)
+        fatsecret.add_food_entry(user, food_entry("Skyr Nowy", Meal.SNACKS, yesterday, kcal=200))
+        cached = await get_period(client, yesterday.isoformat(), yesterday.isoformat())
+        clock.now += timedelta(hours=6)
+        expired = await get_period(client, yesterday.isoformat(), yesterday.isoformat())
+
+    assert cached["days"][0]["totals"]["kcal"] == 100
+    assert expired["days"][0]["totals"]["kcal"] == 200
+    assert fatsecret.requests == 2
+
+
+async def test_period_caches_belong_only_to_the_calling_user(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    yesterday = DAY - timedelta(days=1)
+
+    fatsecret.add_food_entry(
+        household.user("jakub").fatsecret, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=100)
+    )
+    fatsecret.add_food_entry(
+        household.user("ola").fatsecret, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=200)
+    )
+
+    async with connect("jakub") as client:
+        await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+        jakubs = await get_period(client, yesterday.isoformat(), yesterday.isoformat())
+
+    async with connect("ola") as client:
+        olas = await get_period(client, yesterday.isoformat(), yesterday.isoformat())
+
+    assert jakubs["days"][0]["totals"]["kcal"] == 100
+    assert olas["days"][0]["totals"]["kcal"] == 200
+    assert fatsecret.requests == 2
+
+
+async def test_an_uncached_period_uses_month_totals_without_loading_the_whole_food_history(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+
+    for offset in range(14):
+        day = DAY - timedelta(days=offset)
+
+        fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, day, kcal=100))
+
+    fatsecret.limit_requests_to(1)
+
+    async with connect("jakub") as client:
+        period = await get_period(client, "2026-10-01", DAY.isoformat())
+
+    assert [day["totals"]["kcal"] for day in period["days"]] == [100] * 14
+    assert fatsecret.requests == 1
 
 
 async def test_daily_totals_and_targets_include_both_endpoints(

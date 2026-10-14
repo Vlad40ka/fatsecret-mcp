@@ -12,6 +12,7 @@ from mcp import Client
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.parsing import day_number
+from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
@@ -37,7 +38,7 @@ CLOCK = FakeClock(datetime(2015, 1, 14, 11, 0, tzinfo=UTC))
     ],
 )
 async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
-    tool: str, recorded: str, caplog: pytest.LogCaptureFixture
+    tool: str, recorded: str, caplog: pytest.LogCaptureFixture, request_limits: RequestLimits
 ) -> None:
     caplog.set_level(logging.DEBUG)
     household = load_household(
@@ -71,7 +72,8 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
         fatsecret.answer_everything_with(recorded)
 
     async with fatsecret.client() as http:
-        server = build_server(household.user("jakub"), FatSecretApi(household.consumer, http), CLOCK)
+        gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
+        server = build_server(household.user("jakub"), gateway, CLOCK)
 
         async with Client(server) as client:
             arguments = {

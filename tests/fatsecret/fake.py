@@ -12,7 +12,13 @@ from itertools import count
 import anyio.lowlevel
 
 from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition
-from fatsecret_mcp.fatsecret.errors import CredentialsRejected, FatSecretError, InvalidAccessToken, NotFound
+from fatsecret_mcp.fatsecret.errors import (
+    CredentialsRejected,
+    FatSecretError,
+    InvalidAccessToken,
+    NotFound,
+    from_code,
+)
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 
 
@@ -25,6 +31,7 @@ class FakeFatSecret:
         self._catalog: dict[str, Food] = {}
         self._search_results: dict[str, list[CatalogFood]] = {}
         self._in_flight = 0
+        self._request_limit: int | None = None
         self.requests = 0
         """How many calls FatSecret has answered."""
         self.most_in_flight = 0
@@ -77,6 +84,10 @@ class FakeFatSecret:
         """Every call from now on raises `error`, as if FatSecret had answered with it."""
         self._failure = error
 
+    def limit_requests_to(self, requests: int) -> None:
+        """Answer with error 12 once this many requests have been made."""
+        self._request_limit = requests
+
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
         await self._request()
         self._authenticate(user)
@@ -107,6 +118,9 @@ class FakeFatSecret:
         await anyio.lowlevel.checkpoint()
 
         self._in_flight -= 1
+
+        if self._request_limit is not None and self.requests > self._request_limit:
+            raise from_code(12)
 
     def _authenticate(self, user: AccessToken) -> None:
         if self._failure is not None:

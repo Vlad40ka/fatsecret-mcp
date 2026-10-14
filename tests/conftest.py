@@ -4,11 +4,13 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+import anyio.lowlevel
 import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.config.models import Household
+from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.fatsecret.fake import FakeFatSecret
 
@@ -37,6 +39,34 @@ class FakeClock:
 
     def __call__(self) -> datetime:
         return self.now
+
+
+class FakeRequestClock:
+    """Monotonic time and cancellable pacing waits, without waiting in real time."""
+
+    def __init__(self) -> None:
+        self.elapsed = 0.0
+
+    def __call__(self) -> float:
+        return self.elapsed
+
+    async def sleep(self, seconds: float) -> None:
+        await anyio.lowlevel.checkpoint()
+
+        self.elapsed += seconds
+
+
+@pytest.fixture
+def request_clock() -> FakeRequestClock:
+    return FakeRequestClock()
+
+
+@pytest.fixture
+def request_limits(request_clock: FakeRequestClock) -> RequestLimits:
+    return RequestLimits(
+        now=request_clock,
+        sleep=request_clock.sleep,
+    )
 
 
 @pytest.fixture

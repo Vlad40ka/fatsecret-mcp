@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -127,6 +127,91 @@ async def test_shows_an_explicit_past_diary_day(
 
     assert day["diary_day"] == "2026-10-10"
     assert entry_names(day) == ["Pizza"]
+
+
+async def test_history_is_loaded_only_when_needed_and_an_older_day_is_reused(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+    older_day = date(2026, 9, 30)
+
+    fatsecret.add_food_entry(user, food_entry("Pizza", Meal.DINNER, older_day, kcal=900))
+
+    async with connect("jakub") as client:
+        await client.list_tools()
+
+        assert fatsecret.requests == 0
+
+        await get_diary_day(client)
+
+        assert fatsecret.requests == 1
+
+        first = await get_diary_day(client, diary_day=older_day.isoformat())
+        second = await get_diary_day(client, diary_day=older_day.isoformat())
+
+    assert entry_names(first) == entry_names(second) == ["Pizza"]
+    assert fatsecret.requests == 2
+
+
+async def test_a_past_day_stays_cached_until_an_explicit_refresh(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household, clock: FakeClock
+) -> None:
+    user = household.user("jakub").fatsecret
+
+    fatsecret.add_food_entry(user, food_entry("Pizza", Meal.DINNER, YESTERDAY, kcal=900))
+
+    async with connect("jakub") as client:
+        first = await get_diary_day(client, diary_day=YESTERDAY.isoformat())
+        clock.now += timedelta(hours=6)
+
+        fatsecret.delete_food_entries(user, YESTERDAY)
+        fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, YESTERDAY, kcal=100))
+        cached = await get_diary_day(client, diary_day=YESTERDAY.isoformat())
+        refreshed = await get_diary_day(client, diary_day=YESTERDAY.isoformat(), refresh=True)
+
+    assert entry_names(first) == entry_names(cached) == ["Pizza"]
+    assert entry_names(refreshed) == ["Skyr"]
+    assert fatsecret.requests == 2
+
+
+async def test_today_is_read_fresh_after_every_change(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+
+    async with connect("jakub") as client:
+        empty = await get_diary_day(client)
+
+        fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, TODAY, kcal=100))
+        added = await get_diary_day(client)
+
+        fatsecret.delete_food_entries(user, TODAY)
+        deleted = await get_diary_day(client)
+
+    assert entry_names(empty) == entry_names(deleted) == []
+    assert entry_names(added) == ["Skyr"]
+    assert fatsecret.requests == 3
+
+
+async def test_a_new_server_session_does_not_reuse_the_previous_sessions_cached_day(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    user = household.user("jakub").fatsecret
+
+    fatsecret.add_food_entry(user, food_entry("Pizza", Meal.DINNER, YESTERDAY, kcal=900))
+
+    async with connect("jakub") as client:
+        first = await get_diary_day(client, diary_day=YESTERDAY.isoformat())
+
+    fatsecret.delete_food_entries(user, YESTERDAY)
+    fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, YESTERDAY, kcal=100))
+
+    async with connect("jakub") as client:
+        second = await get_diary_day(client, diary_day=YESTERDAY.isoformat())
+
+    assert entry_names(first) == ["Pizza"]
+    assert entry_names(second) == ["Skyr"]
+    assert fatsecret.requests == 2
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ from fatsecret_mcp.fatsecret import errors, parsing
 from fatsecret_mcp.fatsecret.errors import FatSecretError, UpstreamFailure
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
 from fatsecret_mcp.fatsecret.oauth import signed_url
+from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 
 API_URL = "https://platform.fatsecret.com/rest/server.api"
 
@@ -29,9 +30,12 @@ logging.getLogger("httpcore2").setLevel(logging.WARNING)
 
 
 class FatSecretApi:
-    def __init__(self, consumer: ConsumerKey, http: httpx2.AsyncClient) -> None:
+    def __init__(
+        self, consumer: ConsumerKey, http: httpx2.AsyncClient, *, request_limits: RequestLimits | None = None
+    ) -> None:
         self._consumer = consumer
         self._http = http
+        self._request_limits = request_limits if request_limits is not None else RequestLimits()
 
     async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
         params = {"search_expression": query}
@@ -62,13 +66,16 @@ class FatSecretApi:
         return parsing.month_totals(body)
 
     async def _call(self, method: str, params: Mapping[str, str], user: AccessToken | None) -> dict[str, Any]:
-        url = signed_url("GET", API_URL, {"method": method, "format": "json", **params}, self._consumer, user)
-
         try:
-            body = _json_object(await self._get(url))
+            async with self._request_limits.request():
+                # Sign after any pacing wait so OAuth timestamps are fresh when the request is sent.
+                url = signed_url(
+                    "GET", API_URL, {"method": method, "format": "json", **params}, self._consumer, user
+                )
+                body = _json_object(await self._get(url))
 
-            if "error" in body:
-                raise _error(body["error"])
+                if "error" in body:
+                    raise _error(body["error"])
         except FatSecretError as error:
             logger.warning("FatSecret %s failed: %s (code %s)", method, type(error).__name__, error.code)
             raise

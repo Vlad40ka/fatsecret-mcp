@@ -24,7 +24,9 @@ FATSECRET_MCP_USERS='[{"id": "me", "display_name": "Me", "fatsecret_access_token
 
 `FATSECRET_MCP_USERS` lists everyone the server serves. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as.
 
-Food search looks through what you logged in the last 14 days before the FatSecret catalog. To change that, set `FATSECRET_MCP_RECENT_FOOD_DAYS` (1 to 31). Each day costs one FatSecret API call per search.
+Food search looks through what you logged in the last 14 days, including today, before the FatSecret catalog. To change that, set `FATSECRET_MCP_RECENT_FOOD_DAYS` (1 to 31). History is loaded only when needed; each uncached day costs one FatSecret API call.
+
+Past-day entries are shared across food searches and diary questions in memory until the server stops or twelve hours pass from fetching them. Today is always read fresh. If you edit a past day in the FatSecret app, ask Claude to refresh it: `search_foods`, `get_diary_day` and `get_period_summary` accept `refresh=true`. Period summaries reuse cached entries and fetch month totals for dates not yet loaded.
 
 Then add the server to Claude Code:
 

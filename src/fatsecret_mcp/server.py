@@ -8,6 +8,7 @@ from mcp.server import MCPServer
 
 from fatsecret_mcp.config.models import DEFAULT_RECENT_FOOD_DAYS, User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
+from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from fatsecret_mcp.tools import get_diary_day, get_period_summary, search_foods
 from fatsecret_mcp.tools.schemas import ATTRIBUTION
@@ -50,8 +51,16 @@ def build_server(
         version=version("fatsecret-mcp"),
     )
 
-    get_diary_day.register(server, user, fatsecret, clock)
-    get_period_summary.register(server, user, fatsecret)
-    search_foods.register(server, user, fatsecret, clock, recent_food_days)
+    diary = UserDiary(
+        fatsecret=fatsecret,
+        user=user.fatsecret,
+        timezone=user.timezone,
+        clock=clock,
+        recent_food_days=recent_food_days,
+    )
+
+    get_diary_day.register(server, user, diary, clock)
+    get_period_summary.register(server, user, diary)
+    search_foods.register(server, fatsecret, diary)
 
     return server

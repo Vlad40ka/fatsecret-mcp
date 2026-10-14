@@ -10,12 +10,18 @@ from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
+import anyio
 import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import Food, FoodEntry, Meal, Nutrition, Serving
-from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken
+from fatsecret_mcp.fatsecret.errors import (
+    DailyQuotaExceeded,
+    FatSecretError,
+    InvalidAccessToken,
+    TooManyActions,
+)
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
@@ -40,11 +46,16 @@ def logged(name: str, diary_day: date, **details: Any) -> FoodEntry:
     return food_entry(name, Meal.SNACKS, diary_day, **details)
 
 
-async def search(client: Client, description: str, english_rendering: str | None = None) -> dict[str, Any]:
-    arguments = {"description": description}
+async def search(
+    client: Client, description: str, english_rendering: str | None = None, *, refresh: bool = False
+) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"description": description}
 
     if english_rendering is not None:
         arguments["english_rendering"] = english_rendering
+
+    if refresh:
+        arguments["refresh"] = True
 
     result = await client.call_tool("search_foods", arguments)
 
@@ -224,16 +235,17 @@ async def test_blank_searches_are_rejected(
     assert str(DailyQuotaExceeded()) not in str(result.content)
 
 
+@pytest.mark.parametrize("error", [DailyQuotaExceeded(), TooManyActions()])
 async def test_upstream_errors_are_not_reported_as_no_matches(
-    connect: Connect, fatsecret: FakeFatSecret
+    connect: Connect, fatsecret: FakeFatSecret, error: FatSecretError
 ) -> None:
-    fatsecret.fail_with(DailyQuotaExceeded())
+    fatsecret.fail_with(error)
 
     async with connect("jakub") as client:
         result = await client.call_tool("search_foods", {"description": "chicken breast"})
 
     assert result.is_error
-    assert str(DailyQuotaExceeded()) in str(result.content)
+    assert str(error) in str(result.content)
 
 
 async def test_search_is_read_only_and_requests_an_english_rendering(connect: Connect) -> None:
@@ -642,6 +654,247 @@ async def test_a_search_reads_each_diary_day_once_and_all_at_once(
     # 14 Diary Days, one catalog search and five Foods.
     assert fatsecret.requests == 14 + 1 + 5
     assert fatsecret.most_in_flight == 14
+
+
+async def test_searching_a_meals_foods_in_a_row_does_not_repeat_the_past_days_burst(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken, chicken: Food
+) -> None:
+    foods = [replace(chicken, id=str(index)) for index in range(5)]
+    descriptions = ["chicken breast", "grilled chicken", "roast chicken", "steamed chicken"]
+
+    for food in foods:
+        fatsecret.add_food(food)
+
+    for description in descriptions:
+        fatsecret.set_search_results(description, foods)
+
+    fatsecret.add_food_entry(jakub, logged("Chicken Breast", days_ago(1)))
+    # A simulated burst limit, not a claim about FatSecret's undocumented threshold.
+    fatsecret.limit_requests_to(45)
+
+    async with connect("jakub") as client:
+        for description in descriptions:
+            found = await search(client, description)
+
+            assert recent_food_names(found) == ["Chicken Breast"]
+            assert len(found["matches"]) == 6
+
+    assert fatsecret.requests == 20 + 3 * 7
+
+
+@pytest.mark.parametrize("seconds", [43199, 43200, 43201])
+async def test_past_diary_days_expire_after_twelve_hours_even_if_searched_in_between(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken, clock: FakeClock, seconds: int
+) -> None:
+    clock.now = clock.now.replace(hour=8)
+
+    fatsecret.add_food_entry(jakub, logged("Skyr Stary", days_ago(1)))
+
+    async with connect("jakub") as client:
+        original = await search(client, "skyr")
+
+        fatsecret.delete_food_entries(jakub, days_ago(1))
+        fatsecret.add_food_entry(jakub, logged("Skyr Nowy", days_ago(1)))
+        clock.now += timedelta(seconds=100)
+        before_expiry = await search(client, "skyr")
+        clock.now += timedelta(seconds=seconds - 100)
+        after = await search(client, "skyr")
+
+    assert recent_food_names(original) == ["Skyr Stary"]
+    assert recent_food_names(before_expiry) == ["Skyr Stary"]
+    assert recent_food_names(after) == (["Skyr Stary"] if seconds < 43200 else ["Skyr Nowy"])
+
+
+async def test_an_empty_past_diary_day_is_cached_and_refreshes_after_twelve_hours(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken, clock: FakeClock
+) -> None:
+    async with connect("jakub") as client:
+        empty = await search(client, "skyr")
+
+        fatsecret.add_food_entry(jakub, logged("Skyr Nowy", days_ago(1)))
+        still_empty = await search(client, "skyr")
+        clock.now += timedelta(hours=12)
+        refreshed = await search(client, "skyr")
+
+    assert empty["status"] == still_empty["status"] == "not_found"
+    assert recent_food_names(refreshed) == ["Skyr Nowy"]
+
+
+async def test_todays_food_entries_appear_and_disappear_immediately_between_searches(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    async with connect("jakub") as client:
+        empty = await search(client, "skyr")
+
+        fatsecret.add_food_entry(jakub, logged("Skyr Nowy", TODAY))
+        added = await search(client, "skyr")
+
+        fatsecret.delete_food_entries(jakub, TODAY)
+        deleted = await search(client, "skyr")
+
+    assert empty["status"] == deleted["status"] == "not_found"
+    assert recent_food_names(added) == ["Skyr Nowy"]
+
+
+async def test_the_cache_window_moves_at_midnight_in_the_users_timezone(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken, clock: FakeClock
+) -> None:
+    clock.now = clock.now.replace(hour=21, minute=59)
+
+    fatsecret.add_food_entry(jakub, logged("Skyr Najstarszy", days_ago(13)))
+    fatsecret.add_food_entry(jakub, logged("Skyr Dzisiejszy", TODAY))
+
+    async with connect("jakub") as client:
+        before_midnight = await search(client, "skyr")
+        clock.now += timedelta(minutes=1)
+
+        # Yesterday was previously today: it must be fetched before it can be cached.
+        fatsecret.add_food_entry(jakub, logged("Skyr Dopisany", TODAY))
+        fatsecret.add_food_entry(jakub, logged("Skyr Jutrzejszy", TODAY + timedelta(days=1)))
+        after_midnight = await search(client, "skyr")
+
+    assert recent_food_names(before_midnight) == ["Skyr Dzisiejszy", "Skyr Najstarszy"]
+    assert recent_food_names(after_midnight) == ["Skyr Jutrzejszy", "Skyr Dzisiejszy", "Skyr Dopisany"]
+    # First scan + catalog, then yesterday + today + catalog.
+    assert fatsecret.requests == 15 + 3
+
+
+async def test_overlapping_searches_share_the_past_days_scan(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    fatsecret.add_food_entry(jakub, logged("Skyr Waniliowy", days_ago(1)))
+    fatsecret.limit_requests_to(20)
+    results: list[dict[str, Any]] = []
+
+    async with connect("jakub") as client:
+
+        async def find_skyr() -> None:
+            found = await search(client, "skyr")
+
+            results.append(found)
+
+        async with anyio.create_task_group() as group:
+            for _ in range(3):
+                group.start_soon(find_skyr)
+
+    assert len(results) == 3
+
+    for found in results:
+        assert recent_food_names(found) == ["Skyr Waniliowy"]
+
+    assert fatsecret.requests == 15 + 2 + 2
+
+
+async def test_a_failed_diary_scan_is_retried_after_fatsecret_recovers(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    fatsecret.add_food_entry(jakub, logged("Skyr Waniliowy", days_ago(1)))
+    fatsecret.limit_requests_to(0)
+
+    async with connect("jakub") as client:
+        failed = await client.call_tool("search_foods", {"description": "skyr"})
+
+        assert failed.is_error
+        assert str(TooManyActions()) in str(failed.content)
+
+        fatsecret.limit_requests_to(100)
+        recovered = await search(client, "skyr")
+
+    assert recent_food_names(recovered) == ["Skyr Waniliowy"]
+
+
+async def test_a_warm_past_days_cache_does_not_hide_a_revoked_access_token(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    fatsecret.add_food_entry(jakub, logged("Skyr Waniliowy", days_ago(1)))
+
+    async with connect("jakub") as client:
+        await search(client, "skyr")
+
+        fatsecret.revoke(jakub)
+        result = await client.call_tool("search_foods", {"description": "skyr"})
+
+    assert result.is_error
+    assert str(InvalidAccessToken()) in str(result.content)
+
+
+async def test_refreshing_a_past_diary_day_updates_the_recent_foods_used_by_search(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    yesterday = days_ago(1)
+
+    fatsecret.add_food_entry(jakub, logged("Skyr Stary", yesterday))
+
+    async with connect("jakub") as client:
+        await search(client, "skyr")
+
+        fatsecret.delete_food_entries(jakub, yesterday)
+        fatsecret.add_food_entry(jakub, logged("Skyr Nowy", yesterday, kcal=200))
+        day = await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat(), "refresh": True})
+        refreshed = await search(client, "skyr")
+
+    assert not day.is_error
+    assert day.structured_content is not None
+    assert day.structured_content["totals"]["kcal"] == 200
+    assert recent_food_names(refreshed) == ["Skyr Nowy"]
+    assert fatsecret.requests == 15 + 1 + 2
+
+
+async def test_a_historical_day_question_reuses_the_history_loaded_by_food_search(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    fatsecret.add_food_entry(jakub, logged("Skyr Waniliowy", days_ago(1)))
+    fatsecret.limit_requests_to(15)
+
+    async with connect("jakub") as client:
+        await search(client, "skyr")
+        day = await client.call_tool("get_diary_day", {"diary_day": days_ago(1).isoformat()})
+
+    assert not day.is_error
+    assert day.structured_content is not None
+    assert day.structured_content["totals"]["kcal"] == 100
+    assert fatsecret.requests == 15
+
+
+async def test_a_later_meal_reuses_history_and_can_explicitly_refresh_external_changes(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken, clock: FakeClock
+) -> None:
+    fatsecret.add_food_entry(jakub, logged("Skyr Stary", days_ago(1)))
+
+    async with connect("jakub") as client:
+        await search(client, "skyr")
+        clock.now += timedelta(hours=6)
+
+        fatsecret.delete_food_entries(jakub, days_ago(1))
+        fatsecret.add_food_entry(jakub, logged("Skyr Nowy", days_ago(1)))
+        cached = await search(client, "skyr")
+
+        assert fatsecret.requests == 15 + 2
+
+        refreshed = await search(client, "skyr", refresh=True)
+        day = await client.call_tool("get_diary_day", {"diary_day": days_ago(1).isoformat()})
+
+    assert recent_food_names(cached) == ["Skyr Stary"]
+    assert recent_food_names(refreshed) == ["Skyr Nowy"]
+    assert not day.is_error
+    assert fatsecret.requests == 15 + 2 + 15
+
+
+async def test_search_reuses_a_past_diary_day_already_read_by_another_tool(
+    connect: Connect, fatsecret: FakeFatSecret, jakub: AccessToken
+) -> None:
+    yesterday = days_ago(1)
+
+    fatsecret.add_food_entry(jakub, logged("Skyr Waniliowy", yesterday))
+    fatsecret.limit_requests_to(15)
+
+    async with connect("jakub") as client:
+        day = await client.call_tool("get_diary_day", {"diary_day": yesterday.isoformat()})
+        found = await search(client, "skyr")
+
+    assert not day.is_error
+    assert recent_food_names(found) == ["Skyr Waniliowy"]
+    assert fatsecret.requests == 15
 
 
 async def test_a_revoked_access_token_is_reported_rather_than_searching_the_catalog_alone(
