@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import httpx2
 
-from fatsecret_mcp.domain.models import FoodEntry, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Nutrition
 from fatsecret_mcp.fatsecret import errors, parsing
 from fatsecret_mcp.fatsecret.errors import FatSecretError, UpstreamFailure
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
@@ -32,6 +32,21 @@ class FatSecretApi:
     def __init__(self, consumer: ConsumerKey, http: httpx2.AsyncClient) -> None:
         self._consumer = consumer
         self._http = http
+
+    async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
+        params = {"search_expression": query}
+
+        if max_results is not None:
+            params["max_results"] = str(max_results)
+
+        body = await self._call("foods.search", params, None)
+
+        return parsing.catalog_foods(body)
+
+    async def get_food(self, food_id: str) -> Food:
+        body = await self._call("food.get.v5", {"food_id": food_id}, None)
+
+        return parsing.food(body)
 
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
         body = await self._call("food_entries.get.v2", {"date": str(parsing.day_number(day))}, user)

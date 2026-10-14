@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
-from fatsecret_mcp.domain.models import FoodEntry, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Nutrition
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,14 @@ class AccessToken:
 
 
 class FatSecretGateway(Protocol):
+    async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
+        """The first page of catalog matches, in FatSecret's order; no User credentials needed."""
+        ...
+
+    async def get_food(self, food_id: str) -> Food:
+        """A catalog Food with Servings, including derived Servings that cannot be logged (id 0)."""
+        ...
+
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
         """The User's Food Entries for one Diary Day; an empty list when there are none."""
         ...

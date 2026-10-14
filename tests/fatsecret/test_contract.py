@@ -12,9 +12,9 @@ from typing import Protocol
 
 import pytest
 
-from fatsecret_mcp.domain.models import FoodEntry, Meal, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.client import FatSecretApi
-from fatsecret_mcp.fatsecret.errors import InvalidAccessToken
+from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken, NotFound
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from tests.fatsecret.fake import FakeFatSecret, food_entry
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret
@@ -85,6 +85,93 @@ RECORDED_FIXTURES = {
     EMPTY_DAY: "food_entries_get_empty.json",
 }
 
+CATALOG = [
+    CatalogFood(
+        id="1641",
+        name="Chicken Breast",
+        brand=None,
+    ),
+    CatalogFood(
+        id="4881229",
+        name="Skinless Chicken Breast",
+        brand=None,
+    ),
+    CatalogFood(
+        id="5673332",
+        name="Chicken Breast",
+        brand="Kirkland Signature",
+    ),
+    CatalogFood(
+        id="742402",
+        name="Boneless Skinless Chicken Breast",
+        brand="Publix",
+    ),
+    CatalogFood(
+        id="1644",
+        name="Roasted Broiled or Baked Chicken Breast",
+        brand=None,
+    ),
+    CatalogFood(
+        id="48833",
+        name="Boneless Skinless Chicken Breasts",
+        brand="Tyson Foods",
+    ),
+    CatalogFood(
+        id="1646",
+        name="Roasted Broiled or Baked Chicken Breast (Skin Not Eaten)",
+        brand=None,
+    ),
+    CatalogFood(
+        id="49396",
+        name="Grilled Chicken Breast Strips",
+        brand="Perdue",
+    ),
+    CatalogFood(
+        id="4718517",
+        name="Boneless Skinless Chicken Breast",
+        brand="Wal-Mart",
+    ),
+    CatalogFood(
+        id="6697691",
+        name="Boneless Skinless Chicken Breast",
+        brand="Sanderson Farms",
+    ),
+]
+
+BRANDED_FOOD = Food(
+    id="5673332",
+    name="Chicken Breast",
+    brand="Kirkland Signature",
+    servings=[
+        Serving(
+            id="5509656",
+            description="4 oz",
+            metric_amount=112,
+            metric_unit="g",
+            number_of_units=1,
+            nutrition=Nutrition(
+                kcal=110,
+                protein=20,
+                fat=1.5,
+                carbohydrate=0,
+            ),
+        ),
+        Serving(
+            id="0",
+            description="100 g",
+            metric_amount=100,
+            metric_unit="g",
+            number_of_units=100,
+            nutrition=Nutrition(
+                kcal=98,
+                protein=17.86,
+                fat=1.34,
+                carbohydrate=0,
+            ),
+        ),
+    ],
+)
+
 
 class World(Protocol):
     @property
@@ -93,6 +180,8 @@ class World(Protocol):
     def given_recorded_diary_day(self, day: date) -> None: ...
     def given_recorded_month(self, scenario: str) -> None: ...
     def given_revoked_access_token(self) -> None: ...
+    def given_catalog(self) -> None: ...
+    def given_quota_exceeded(self) -> None: ...
 
 
 class FakeWorld:
@@ -108,6 +197,13 @@ class FakeWorld:
 
     def given_revoked_access_token(self) -> None:
         self.fake.revoke(USER)
+
+    def given_catalog(self) -> None:
+        self.fake.set_search_results("chicken breast", CATALOG)
+        self.fake.add_food(BRANDED_FOOD)
+
+    def given_quota_exceeded(self) -> None:
+        self.fake.fail_with(DailyQuotaExceeded())
 
     def given_recorded_month(self, scenario: str) -> None:
         if scenario != "empty":
@@ -132,6 +228,19 @@ class RecordedWorld:
 
     def given_revoked_access_token(self) -> None:
         self.recorded.answer_everything_with("error_invalid_access_token.json")
+
+    def given_catalog(self) -> None:
+        for name in (
+            "foods_search.json",
+            "foods_search_single.json",
+            "foods_search_empty.json",
+            "food_get_brand.json",
+            "error_food_not_found.json",
+        ):
+            self.recorded.serve(name)
+
+    def given_quota_exceeded(self) -> None:
+        self.recorded.answer_everything_with("error_daily_quota.json")
 
     def given_recorded_month(self, scenario: str) -> None:
         suffix = "" if scenario == "full" else f"_{scenario}"
@@ -200,3 +309,42 @@ async def test_month_totals_reject_a_revoked_access_token(world: World) -> None:
 
     with pytest.raises(InvalidAccessToken):
         await world.gateway.get_month_totals(USER, REVOKED_TOKEN_DAY)
+
+
+@pytest.mark.parametrize("limit", [1, 10])
+async def test_catalog_search_returns_ordered_foods_and_optional_brands(world: World, limit: int) -> None:
+    world.given_catalog()
+
+    foods = await world.gateway.search_catalog("chicken breast", max_results=limit)
+
+    assert foods == CATALOG[:limit]
+
+
+async def test_catalog_search_can_find_nothing(world: World) -> None:
+    world.given_catalog()
+
+    assert await world.gateway.search_catalog("qqzxvjkw") == []
+
+
+async def test_get_food_returns_serving_units_metrics_and_nutrition(world: World) -> None:
+    world.given_catalog()
+
+    assert await world.gateway.get_food("5673332") == BRANDED_FOOD
+
+
+async def test_get_food_reports_an_unknown_food(world: World) -> None:
+    world.given_catalog()
+
+    with pytest.raises(NotFound):
+        await world.gateway.get_food("999999999999")
+
+
+@pytest.mark.parametrize("operation", ["search", "get"])
+async def test_catalog_operations_report_quota_exhaustion(world: World, operation: str) -> None:
+    world.given_quota_exceeded()
+
+    call = world.gateway.search_catalog if operation == "search" else world.gateway.get_food
+    argument = "chicken breast" if operation == "search" else "5673332"
+
+    with pytest.raises(DailyQuotaExceeded):
+        await call(argument)

@@ -1,12 +1,13 @@
-"""An in-memory FatSecret: one Food Diary per FatSecret account."""
+"""An in-memory FatSecret: a shared catalog and one Food Diary per FatSecret account."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from itertools import count
 
-from fatsecret_mcp.domain.models import FoodEntry, Meal, Nutrition
-from fatsecret_mcp.fatsecret.errors import CredentialsRejected, FatSecretError, InvalidAccessToken
+from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition
+from fatsecret_mcp.fatsecret.errors import CredentialsRejected, FatSecretError, InvalidAccessToken, NotFound
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 
 
@@ -16,6 +17,29 @@ class FakeFatSecret:
         self._diaries: dict[str, list[FoodEntry]] = {}
         self._deleted_days: dict[str, set[date]] = {}
         self._failure: FatSecretError | None = None
+        self._catalog: dict[str, Food] = {}
+        self._search_results: dict[str, list[CatalogFood]] = {}
+
+    def add_food(self, food: Food) -> None:
+        self._catalog[food.id] = food
+
+    def set_search_results(self, query: str, foods: Sequence[CatalogFood]) -> None:
+        self._search_results[query] = list(foods)
+
+    async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
+        if self._failure is not None:
+            raise self._failure
+
+        return self._search_results.get(query, [])[: max_results or 20]
+
+    async def get_food(self, food_id: str) -> Food:
+        if self._failure is not None:
+            raise self._failure
+
+        if food_id not in self._catalog:
+            raise NotFound()
+
+        return self._catalog[food_id]
 
     def add_account(self, user: AccessToken) -> None:
         self._accounts[user.token] = user

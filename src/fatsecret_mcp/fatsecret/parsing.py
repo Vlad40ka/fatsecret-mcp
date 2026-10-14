@@ -11,7 +11,7 @@ import re
 from datetime import date, timedelta
 from typing import Any, cast
 
-from fatsecret_mcp.domain.models import FoodEntry, Meal, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.errors import UpstreamFailure
 
 EPOCH = date(1970, 1, 1)
@@ -44,6 +44,60 @@ def food_entries(body: dict[str, Any]) -> list[FoodEntry]:
     raw_entries = _as_list(food_entries.get("food_entry"))
 
     return [_food_entry(raw) for raw in raw_entries]
+
+
+def catalog_foods(body: dict[str, Any]) -> list[CatalogFood]:
+    foods = _object(body, "foods")
+    raw_foods = _as_list(foods.get("food"))
+    matches = [_catalog_food(raw) for raw in raw_foods]
+
+    return matches
+
+
+def _catalog_food(raw: dict[str, Any]) -> CatalogFood:
+    return CatalogFood(
+        id=_text(raw, "food_id"),
+        name=_text(raw, "food_name"),
+        brand=_optional_text(raw, "brand_name"),
+    )
+
+
+def food(body: dict[str, Any]) -> Food:
+    raw = _object(body, "food")
+    raw_servings = _as_list(_object(raw, "servings").get("serving"))
+    servings = [_serving(serving) for serving in raw_servings]
+
+    return Food(
+        id=_text(raw, "food_id"),
+        name=_text(raw, "food_name"),
+        brand=_optional_text(raw, "brand_name"),
+        servings=servings,
+    )
+
+
+def _serving(raw: dict[str, Any]) -> Serving:
+    metric_amount = _number(raw, "metric_serving_amount") if raw.get("metric_serving_amount") else None
+
+    return Serving(
+        id=_text(raw, "serving_id"),
+        description=_text(raw, "serving_description"),
+        metric_amount=metric_amount,
+        metric_unit=_optional_text(raw, "metric_serving_unit"),
+        number_of_units=_number(raw, "number_of_units"),
+        nutrition=Nutrition(
+            kcal=_number(raw, "calories", default=0),
+            protein=_number(raw, "protein", default=0),
+            fat=_number(raw, "fat", default=0),
+            carbohydrate=_number(raw, "carbohydrate", default=0),
+        ),
+    )
+
+
+def _optional_text(raw: dict[str, Any], key: str) -> str | None:
+    if raw.get(key) is None:
+        return None
+
+    return _text(raw, key)
 
 
 def month_totals(body: dict[str, Any]) -> dict[date, Nutrition]:

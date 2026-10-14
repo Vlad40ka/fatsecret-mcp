@@ -36,7 +36,7 @@ DAY = date(2026, 10, 13)
         ("error_invalid_signature.json", CredentialsRejected),
     ],
 )
-@pytest.mark.parametrize("operation", ["food_entries", "month_totals"])
+@pytest.mark.parametrize("operation", ["food_entries", "month_totals", "search_catalog", "get_food"])
 async def test_fatsecret_errors_map_to_domain_errors(
     recorded_error: str, domain_error: type[FatSecretError], operation: str
 ) -> None:
@@ -46,10 +46,15 @@ async def test_fatsecret_errors_map_to_domain_errors(
 
     async with recorded.client() as http:
         gateway = FatSecretApi(CONSUMER, http)
-        call = gateway.list_food_entries if operation == "food_entries" else gateway.get_month_totals
+        calls = {
+            "food_entries": lambda: gateway.list_food_entries(USER, DAY),
+            "month_totals": lambda: gateway.get_month_totals(USER, DAY),
+            "search_catalog": lambda: gateway.search_catalog("chicken breast"),
+            "get_food": lambda: gateway.get_food("1641"),
+        }
 
         with pytest.raises(domain_error) as raised:
-            await call(USER, DAY)
+            await calls[operation]()
 
     assert raised.value.code == fixture(recorded_error)["response"]["json"]["error"]["code"]
 
@@ -170,3 +175,72 @@ async def test_invalid_month_diary_days_become_upstream_failures(bad_day: str) -
     async with recorded.client() as http:
         with pytest.raises(UpstreamFailure):
             await FatSecretApi(CONSUMER, http).get_month_totals(USER, date(2015, 1, 1))
+
+
+async def test_generic_food_preserves_fractional_servings_and_gram_units() -> None:
+    recorded = RecordedFatSecret()
+
+    recorded.serve("food_get_generic.json")
+
+    async with recorded.client() as http:
+        food = await FatSecretApi(CONSUMER, http).get_food("1641")
+
+    grams, half_breast = food.servings[:2]
+
+    assert food.id == "1641"
+    assert food.name == "Chicken Breast"
+    assert food.brand is None
+    assert len(food.servings) == 10
+    assert grams.id == "50321"
+    assert grams.description == "100 g"
+    assert grams.number_of_units == 100
+    assert grams.metric_amount == 100
+    assert grams.metric_unit == "g"
+    assert grams.nutrition == Nutrition(
+        kcal=195,
+        protein=29.55,
+        fat=7.72,
+        carbohydrate=0,
+    )
+    assert half_breast.number_of_units == 0.5
+    assert half_breast.metric_amount == 84
+    assert half_breast.nutrition.kcal == 164
+
+
+async def test_single_serving_without_optional_metric_fields_is_supported() -> None:
+    # Derived from the recorded response to cover a singleton and omitted optional fields.
+    exchange = fixture("food_get_brand.json")
+    servings = exchange["response"]["json"]["food"]["servings"]
+    serving = servings["serving"][0]
+
+    del serving["metric_serving_amount"]
+    del serving["metric_serving_unit"]
+    servings["serving"] = serving
+    recorded = RecordedFatSecret()
+
+    recorded.serve(exchange)
+
+    async with recorded.client() as http:
+        food = await FatSecretApi(CONSUMER, http).get_food("5673332")
+
+    [parsed] = food.servings
+
+    assert parsed.id == "5509656"
+    assert parsed.description == "4 oz"
+    assert parsed.metric_amount is None
+    assert parsed.metric_unit is None
+    assert parsed.nutrition.kcal == 110
+
+
+@pytest.mark.parametrize("field", ["food_id", "food_name"])
+async def test_food_missing_required_fields_is_an_upstream_failure(field: str) -> None:
+    exchange = fixture("food_get_brand.json")
+
+    del exchange["response"]["json"]["food"][field]
+    recorded = RecordedFatSecret()
+
+    recorded.serve(exchange)
+
+    async with recorded.client() as http:
+        with pytest.raises(UpstreamFailure):
+            await FatSecretApi(CONSUMER, http).get_food("5673332")

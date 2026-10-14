@@ -1,4 +1,4 @@
-"""The Food Diary's concepts as data: Meals, kcal and Macros, Food Entries, and a day's summary."""
+"""Food Diary and catalog concepts as data: Foods, Servings, Food Entries, and summaries."""
 
 from __future__ import annotations
 
@@ -56,6 +56,29 @@ class FoodEntry:
     meal: Meal
     diary_day: date
     nutrition: Nutrition
+
+
+@dataclass(frozen=True)
+class CatalogFood:
+    id: str
+    name: str
+    brand: str | None
+
+
+@dataclass(frozen=True)
+class Serving:
+    id: str
+    description: str
+    metric_amount: float | None
+    metric_unit: str | None
+    number_of_units: float
+    """FatSecret units represented by the description and nutrition (e.g. 100 for '100 g')."""
+    nutrition: Nutrition
+
+
+@dataclass(frozen=True)
+class Food(CatalogFood):
+    servings: list[Serving]
 
 
 @dataclass(frozen=True)

@@ -1,17 +1,27 @@
 """The shapes of the tools' inputs and results, as Claude sees them.
 
-The MCP SDK publishes them as each tool's input and output schema. In the results, numbers are rounded
-for reading, and the `of` methods turn domain objects into these shapes.
+The MCP SDK publishes them as each tool's input and output schema. Diary totals are rounded for
+reading; catalog Servings retain their precision. The `of` methods turn domain objects into these shapes.
 """
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from fatsecret_mcp.domain.models import DaySummary, FoodEntry, Meal, Nutrition, PeriodDaySummary
+from fatsecret_mcp.domain.models import (
+    DaySummary,
+    Food,
+    FoodEntry,
+    Meal,
+    Nutrition,
+    PeriodDaySummary,
+    Serving,
+)
+
+ATTRIBUTION = "Powered by fatsecret Platform API"
 
 # --- Inputs ----------------------------------------------------------------
 
@@ -22,6 +32,12 @@ DiaryDayOrToday = Annotated[
 
 PeriodStart = Annotated[date, Field(description="First Diary Day in the period, inclusive, as YYYY-MM-DD.")]
 PeriodEnd = Annotated[date, Field(description="Last Diary Day in the period, inclusive, as YYYY-MM-DD.")]
+
+FoodDescription = Annotated[str, Field(min_length=1, description="The description as the User said it.")]
+EnglishRendering = Annotated[
+    str | None,
+    Field(min_length=1, description="English rendering for the catalog. Pass this for non-English input."),
+]
 
 
 # --- Results ---------------------------------------------------------------
@@ -118,6 +134,61 @@ class PeriodSummary(BaseModel):
     from_day: date
     to_day: date
     days: list[PeriodDay] = Field(description="Every Diary Day in the period, in chronological order.")
+
+
+class FoodServing(BaseModel):
+    serving_id: str
+    description: str
+    metric_amount: float | None
+    metric_unit: str | None
+    number_of_units: float = Field(
+        description="FatSecret units in this described Serving, e.g. 100 for '100 g'."
+    )
+    kcal: float
+    protein: float
+    fat: float
+    carbohydrate: float
+
+    @classmethod
+    def of(cls, serving: Serving) -> FoodServing:
+        return cls(
+            serving_id=serving.id,
+            description=serving.description,
+            metric_amount=serving.metric_amount,
+            metric_unit=serving.metric_unit,
+            number_of_units=serving.number_of_units,
+            kcal=serving.nutrition.kcal,
+            protein=serving.nutrition.protein,
+            fat=serving.nutrition.fat,
+            carbohydrate=serving.nutrition.carbohydrate,
+        )
+
+
+class FoodMatch(BaseModel):
+    source: Literal["catalog"] = "catalog"
+    food_id: str
+    name: str
+    brand: str | None
+    servings: list[FoodServing] = Field(
+        description="Loggable Servings, with kcal and Macros per described Serving."
+    )
+
+    @classmethod
+    def of(cls, food: Food, servings: list[Serving]) -> FoodMatch:
+        food_servings = [FoodServing.of(serving) for serving in servings]
+
+        return cls(
+            food_id=food.id,
+            name=food.name,
+            brand=food.brand,
+            servings=food_servings,
+        )
+
+
+class FoodSearch(BaseModel):
+    status: Literal["found", "not_found"]
+    matches: list[FoodMatch]
+    attribution: str = ATTRIBUTION
 
 
 def _rounded(grams: float) -> float:
