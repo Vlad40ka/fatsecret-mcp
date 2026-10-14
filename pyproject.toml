@@ -1,0 +1,45 @@
+[project]
+name = "fatsecret-mcp"
+version = "0.1.0"
+description = "Unofficial, self-hosted MCP server for logging food into a FatSecret food diary through Claude."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jakub Jaroński" }]
+requires-python = ">=3.13"
+dependencies = [
+    "httpx2>=2.13,<3",
+    "mcp>=2.3,<3",
+    "pydantic>=2.12,<3",
+    "tzdata>=2026.1",
+]
+
+[project.scripts]
+fatsecret-mcp = "fatsecret_mcp.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.10.12,<0.14"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.1",
+    "ruff>=0.17",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PT", "ASYNC"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
