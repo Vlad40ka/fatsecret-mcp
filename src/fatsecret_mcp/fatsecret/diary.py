@@ -7,6 +7,8 @@ Uncached period summaries use month totals rather than fetching every day's entr
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -39,6 +41,19 @@ class UserDiary:
         self._recent_food_days = recent_food_days
         self._past_days: dict[date, tuple[datetime, tuple[FoodEntry, ...]]] = {}
         self._lock = anyio.Lock()
+        self._cache_changed = anyio.Event()
+
+    @asynccontextmanager
+    async def cache_lifespan(self) -> AsyncGenerator[None]:
+        """Release expired entries while idle and clear all cached entries when the server stops."""
+        async with anyio.create_task_group() as group:
+            group.start_soon(self._expire_cached_days)
+
+            try:
+                yield
+            finally:
+                group.cancel_scope.cancel()
+                self._past_days.clear()
 
     async def entries(self, day: date, *, refresh: bool = False) -> list[FoodEntry]:
         """Read one day, reusing a past day's entries unless an explicit refresh is requested."""
@@ -107,6 +122,31 @@ class UserDiary:
             if fetched_at <= oldest or fetched_at > now or day >= current_day:
                 del self._past_days[day]
 
+    async def _expire_cached_days(self) -> None:
+        while True:
+            self._cache_changed = anyio.Event()
+            changed = self._cache_changed
+
+            # Synchronous eviction must not wait behind a lock held during upstream I/O.
+            self._drop_expired_days()
+            delay = self._seconds_until_expiry()
+
+            if delay is None:
+                await changed.wait()
+            else:
+                with anyio.move_on_after(delay):
+                    await changed.wait()
+
+    def _seconds_until_expiry(self) -> float | None:
+        if not self._past_days:
+            return None
+
+        fetched_times = [fetched_at for fetched_at, _ in self._past_days.values()]
+        earliest_expiry = min(fetched_times) + PAST_DAY_CACHE_TTL
+        remaining = (earliest_expiry - self._clock()).total_seconds()
+
+        return max(0, remaining)
+
     def _discard_days(self, days: list[date]) -> None:
         for day in days:
             self._past_days.pop(day, None)
@@ -135,6 +175,7 @@ class UserDiary:
 
         if day < today(fetched_at, self._timezone):
             self._past_days[day] = (fetched_at, tuple(entries))
+            self._cache_changed.set()
 
         return entries
 

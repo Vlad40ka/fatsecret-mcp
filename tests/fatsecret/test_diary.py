@@ -46,8 +46,11 @@ async def test_invalidating_a_written_past_day_makes_its_new_foods_available_imm
     await diary.invalidate(YESTERDAY)
     after = await diary.recent_foods()
 
-    assert [food.name for food in before] == ["Skyr Stary"]
-    assert [food.name for food in after] == ["Skyr Nowy"]
+    before_names = [food.name for food in before]
+    after_names = [food.name for food in after]
+
+    assert before_names == ["Skyr Stary"]
+    assert after_names == ["Skyr Nowy"]
     assert after[0].servings[0].nutrition.kcal == 200
     assert fatsecret.requests == 14 + 2
 
@@ -93,9 +96,10 @@ async def test_invalidation_discards_an_older_read_that_was_in_flight_when_the_d
             release_read.set()
 
     after = await diary.recent_foods()
+    names = [food.name for food in after]
 
     assert invalidated.is_set()
-    assert [food.name for food in after] == ["Skyr Nowy"]
+    assert names == ["Skyr Nowy"]
 
 
 async def test_changing_a_returned_day_list_does_not_change_the_cached_history(
@@ -108,8 +112,9 @@ async def test_changing_a_returned_day_list_does_not_change_the_cached_history(
 
     day.clear()
     foods = await diary.recent_foods()
+    names = [food.name for food in foods]
 
-    assert [food.name for food in foods] == ["Skyr"]
+    assert names == ["Skyr"]
 
 
 async def test_an_older_day_stays_available_for_reports_without_entering_recent_foods(
@@ -122,9 +127,10 @@ async def test_an_older_day_stays_available_for_reports_without_entering_recent_
     first = await diary.entries(older_day)
     foods = await diary.recent_foods()
     second = await diary.entries(older_day)
+    names = [entry.name for entry in second]
 
     assert first == second
-    assert [entry.name for entry in second] == ["Skyr Stary"]
+    assert names == ["Skyr Stary"]
     assert foods == []
     assert fatsecret.requests == 1 + 14
 
@@ -146,8 +152,9 @@ async def test_an_observed_revoked_token_discards_cached_past_days(
     fatsecret.delete_food_entries(user, YESTERDAY)
     fatsecret.add_food_entry(user, food_entry("Skyr Nowy", Meal.SNACKS, YESTERDAY, kcal=200))
     recovered = await diary.entries(YESTERDAY)
+    names = [entry.name for entry in recovered]
 
-    assert [entry.name for entry in recovered] == ["Skyr Nowy"]
+    assert names == ["Skyr Nowy"]
     assert fatsecret.requests == 3
 
 
@@ -168,8 +175,9 @@ async def test_a_failed_explicit_refresh_cannot_fall_back_to_the_discarded_day(
     fatsecret.delete_food_entries(user, YESTERDAY)
     fatsecret.add_food_entry(user, food_entry("Skyr Nowy", Meal.SNACKS, YESTERDAY, kcal=200))
     recovered = await diary.entries(YESTERDAY)
+    names = [entry.name for entry in recovered]
 
-    assert [entry.name for entry in recovered] == ["Skyr Nowy"]
+    assert names == ["Skyr Nowy"]
     assert fatsecret.requests == 3
 
 
@@ -186,6 +194,7 @@ async def test_moving_the_clock_backwards_does_not_extend_a_cached_days_lifetime
     fatsecret.delete_food_entries(user, YESTERDAY)
     fatsecret.add_food_entry(user, food_entry("Skyr Nowy", Meal.SNACKS, YESTERDAY, kcal=200))
     refreshed = await diary.entries(YESTERDAY)
+    names = [entry.name for entry in refreshed]
 
-    assert [entry.name for entry in refreshed] == ["Skyr Nowy"]
+    assert names == ["Skyr Nowy"]
     assert fatsecret.requests == 2

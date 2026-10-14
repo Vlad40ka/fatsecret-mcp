@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from importlib.metadata import version
 
 from mcp.server import MCPServer
@@ -43,20 +45,26 @@ def build_server(
     recent_food_days: int = DEFAULT_RECENT_FOOD_DAYS,
 ) -> MCPServer:
     """The MCP server acting as `user`, reading their Food Diary through `fatsecret`."""
-    server = MCPServer(
-        name="fatsecret-mcp",
-        title="FatSecret",
-        description=DESCRIPTION,
-        instructions=INSTRUCTIONS,
-        version=version("fatsecret-mcp"),
-    )
-
     diary = UserDiary(
         fatsecret=fatsecret,
         user=user.fatsecret,
         timezone=user.timezone,
         clock=clock,
         recent_food_days=recent_food_days,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_server: MCPServer) -> AsyncGenerator[None]:
+        async with diary.cache_lifespan():
+            yield
+
+    server = MCPServer(
+        name="fatsecret-mcp",
+        title="FatSecret",
+        description=DESCRIPTION,
+        instructions=INSTRUCTIONS,
+        version=version("fatsecret-mcp"),
+        lifespan=lifespan,
     )
 
     get_diary_day.register(server, user, diary, clock)

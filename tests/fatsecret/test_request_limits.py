@@ -79,12 +79,16 @@ async def test_all_gateway_operations_share_pacing_and_sign_after_waiting(
             for call in calls:
                 group.start_soon(call_gateway, call)
 
-    assert {method for method, _, _ in sent} == set(RESPONSES)
-    assert most_in_flight == 1
+    methods = {method for method, _, _ in sent}
+    started_times = [started for _, started, _ in sent]
+    timestamps = [timestamp for _, _, timestamp in sent]
     expected_times = [index * max(1.0, response_seconds) for index in range(4)]
+    expected_timestamps = [int(1000 + started) for started in expected_times]
 
-    assert [started for _, started, _ in sent] == expected_times
-    assert [timestamp for _, _, timestamp in sent] == [int(1000 + started) for started in expected_times]
+    assert methods == set(RESPONSES)
+    assert most_in_flight == 1
+    assert started_times == expected_times
+    assert timestamps == expected_timestamps
 
 
 async def test_error_12_stops_queued_calls_until_the_cooldown_without_extending_it(

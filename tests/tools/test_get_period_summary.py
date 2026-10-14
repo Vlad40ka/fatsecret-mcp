@@ -49,9 +49,12 @@ async def test_a_cached_history_answers_a_period_question_without_more_requests(
         search = await client.call_tool("search_foods", {"description": "skyr"})
         period = await get_period(client, "2026-10-01", yesterday.isoformat())
 
+    has_food_entries = [day["has_food_entries"] for day in period["days"]]
+    daily_kcal = [day["totals"]["kcal"] for day in period["days"]]
+
     assert not search.is_error
-    assert [day["has_food_entries"] for day in period["days"]] == [False] * 11 + [True, True]
-    assert [day["totals"]["kcal"] for day in period["days"]] == [0] * 12 + [200]
+    assert has_food_entries == [False] * 11 + [True, True]
+    assert daily_kcal == [0] * 12 + [200]
     assert fatsecret.requests == 15
 
 
@@ -74,7 +77,9 @@ async def test_a_mixed_period_reuses_cached_days_and_fetches_only_the_missing_mo
         fatsecret.delete_food_entries(user, date(2026, 9, 30))
         period = await get_period(client, "2026-09-29", "2026-10-01")
 
-    assert [day["totals"]["kcal"] for day in period["days"]] == [100, 200, 300]
+    daily_kcal = [day["totals"]["kcal"] for day in period["days"]]
+
+    assert daily_kcal == [100, 200, 300]
     assert fatsecret.requests == 3
 
 
@@ -93,8 +98,11 @@ async def test_a_cached_past_day_and_today_use_history_and_fresh_totals_together
         fatsecret.add_food_entry(user, food_entry("Lunch", Meal.LUNCH, DAY, kcal=500))
         second = await get_period(client, yesterday.isoformat(), DAY.isoformat())
 
-    assert [day["totals"]["kcal"] for day in first["days"]] == [100, 0]
-    assert [day["totals"]["kcal"] for day in second["days"]] == [100, 500]
+    first_kcal = [day["totals"]["kcal"] for day in first["days"]]
+    second_kcal = [day["totals"]["kcal"] for day in second["days"]]
+
+    assert first_kcal == [100, 0]
+    assert second_kcal == [100, 500]
     assert fatsecret.requests == 3
 
 
@@ -190,7 +198,9 @@ async def test_an_uncached_period_uses_month_totals_without_loading_the_whole_fo
     async with connect("jakub") as client:
         period = await get_period(client, "2026-10-01", DAY.isoformat())
 
-    assert [day["totals"]["kcal"] for day in period["days"]] == [100] * 14
+    daily_kcal = [day["totals"]["kcal"] for day in period["days"]]
+
+    assert daily_kcal == [100] * 14
     assert fatsecret.requests == 1
 
 
