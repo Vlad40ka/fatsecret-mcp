@@ -1,6 +1,6 @@
 # fatsecret-mcp
 
-A self-hosted [MCP](https://modelcontextprotocol.io) server that lets Claude read your [FatSecret](https://www.fatsecret.com) food diary and check it against your daily calorie and macro targets. Logging food through Claude is next.
+A self-hosted [MCP](https://modelcontextprotocol.io) server that lets Claude read your [FatSecret](https://www.fatsecret.com) food diary, check it against your daily calorie and macro targets, and draft food entries for your approval. Saving confirmed entries is next.
 
 This project is unofficial. It is not affiliated with or endorsed by FatSecret, and it is not medical or dietary advice.
 
@@ -8,7 +8,7 @@ This project is unofficial. It is not affiliated with or endorsed by FatSecret, 
 
 ## Status
 
-Early development. Today the server runs locally over stdio and answers questions like "what have I eaten today and how much is left?" from your real FatSecret food diary.
+Early development. The server runs locally over stdio, answers diary questions, searches foods and prepares drafts. Drafts show amounts, calories, macros, assumptions, a suggested meal and the day's totals after adding. They expire after thirty minutes and do not write to your diary.
 
 ## Run it locally
 
@@ -19,10 +19,17 @@ Put the configuration in a `.env` file in the repository (it's git-ignored):
 ```sh
 FATSECRET_CONSUMER_KEY=...
 FATSECRET_CONSUMER_SECRET=...
+FATSECRET_MCP_SIGNING_KEY=...
 FATSECRET_MCP_USERS='[{"id": "me", "display_name": "Me", "fatsecret_access_token": "...", "fatsecret_access_secret": "...", "daily_targets": {"kcal": 2200, "protein": 140, "fat": 70, "carbohydrate": 250}, "timezone": "Europe/Warsaw"}]'
 ```
 
 `FATSECRET_MCP_USERS` lists everyone the server serves. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as.
+
+Generate a random signing key once with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` and put it in `FATSECRET_MCP_SIGNING_KEY` (at least 32 characters). Keep it across restarts; changing it invalidates drafts signed with the old key. Draft ids are signed, self-contained values holding entry names, ids, units, meal, diary day, user id and expiry; they contain no nutrition values.
+
+Each user's optional `meal_hours` sets local meal start times, for example `"meal_hours": {"breakfast": "06:00", "lunch": "12:00", "dinner": "18:00", "snacks": "22:00"}` inside their user object. A meal lasts until the next start, including across midnight; times must differ. Omitted starts default to 04:00, 11:30, 16:00 and 21:00 respectively. Between midnight and 04:00, drafts ask whether to use Snacks on the previous day. An explicit meal or diary day overrides suggestions.
+
+To try drafting, ask Claude to find a food and propose an amount. `draft_entries` takes `items` with `food_id`, `serving_id`, `number_of_units` and an optional `assumption`. Units follow the serving returned by `search_foods`: a serving described as "100 g" with 100 units needs 150 units for 150 g. Copy the chosen match's name into `entry_name` to preserve the selection when a recent product and a catalog food share ids. Without a name, Recent Foods take priority; multiple recent products with the same ids require a name. Amounts must be positive and finite, with at most 10,000 units, 10,000 g or ml where weight or volume is known, and 20,000 kcal per item.
 
 Food search looks through what you logged in the last 14 days, including today, before the FatSecret catalog. To change that, set `FATSECRET_MCP_RECENT_FOOD_DAYS` (1 to 31). History is loaded only when needed; each uncached day costs one FatSecret API call.
 

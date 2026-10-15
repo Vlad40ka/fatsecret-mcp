@@ -8,14 +8,15 @@ into these shapes.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from mcp_types import CallToolResult, TextContent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from fatsecret_mcp.domain.models import (
     DaySummary,
+    DraftItem,
     Food,
     FoodEntry,
     Meal,
@@ -42,6 +43,27 @@ EnglishRendering = Annotated[
     str | None,
     Field(min_length=1, description="English rendering for the catalog. Pass this for non-English input."),
 ]
+
+
+class FoodDraftInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    food_id: str = Field(min_length=1)
+    serving_id: str = Field(min_length=1)
+    number_of_units: float = Field(
+        gt=0,
+        le=10000,
+        allow_inf_nan=False,
+    )
+    assumption: str | None = None
+    entry_name: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Copy the chosen match's name from search_foods. Omitted names use Recent Foods first.",
+    )
+
+
+DraftItems = Annotated[list[FoodDraftInput], Field(min_length=1)]
 
 
 # --- Results ---------------------------------------------------------------
@@ -210,6 +232,57 @@ class FoodMatch(BaseModel):
 class FoodSearch(BaseModel):
     status: Literal["found", "not_found"]
     matches: list[FoodMatch]
+    attribution: str = ATTRIBUTION
+
+
+class ProposedEntry(BaseModel):
+    food_id: str
+    serving_id: str
+    name: str
+    serving: str
+    number_of_units: float
+    amount: str
+    kcal: int
+    protein: float
+    fat: float
+    carbohydrate: float
+    assumption: str | None
+
+    @classmethod
+    def of(cls, item: DraftItem) -> ProposedEntry:
+        amounts = Amounts.of(item.nutrition)
+
+        return cls(
+            food_id=item.entry.food_id,
+            serving_id=item.entry.serving_id,
+            name=item.entry.entry_name,
+            serving=item.serving,
+            number_of_units=item.entry.number_of_units,
+            amount=item.amount,
+            kcal=amounts.kcal,
+            protein=amounts.protein,
+            fat=amounts.fat,
+            carbohydrate=amounts.carbohydrate,
+            assumption=item.assumption,
+        )
+
+
+class DayAfter(BaseModel):
+    consumed: Amounts
+    daily_targets: Amounts
+    remaining: Amounts
+
+
+class FoodDraft(BaseModel):
+    draft_id: str
+    expires_at: datetime
+    meal: Meal
+    meal_suggested: bool
+    diary_day: date
+    previous_day_suggested: bool
+    items: list[ProposedEntry]
+    totals: Amounts
+    day_after: DayAfter
     attribution: str = ATTRIBUTION
 
 

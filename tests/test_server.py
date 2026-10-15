@@ -78,7 +78,12 @@ async def test_an_idle_server_releases_expired_entries_without_another_request(
 async def test_stopping_the_server_releases_unexpired_entries_even_if_the_server_is_reachable(
     fatsecret: FakeFatSecret, household: Household, clock: FakeClock
 ) -> None:
-    server = build_server(household.user("jakub"), fatsecret, clock)
+    server = build_server(
+        user=household.user("jakub"),
+        fatsecret=fatsecret,
+        clock=clock,
+        signing_key=household.signing_key,
+    )
 
     async with Client(server) as client:
         reference = await cache_day(client, fatsecret, household.user("jakub").fatsecret)

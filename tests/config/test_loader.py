@@ -10,7 +10,13 @@ import pytest
 
 from fatsecret_mcp.config.loader import HouseholdConfigError, acting_user, load_household
 
-SECRETS = ["consumer-key-0123", "consumer-secret-4567", "ola-token-89ab", "ola-secret-cdef"]
+SECRETS = [
+    "consumer-key-0123",
+    "consumer-secret-4567",
+    "ola-token-89ab",
+    "ola-secret-cdef",
+    "test-signing-key-0123456789abcdef",
+]
 
 
 def ola(**overrides: Any) -> dict[str, Any]:
@@ -30,6 +36,7 @@ def environ(*users: dict[str, Any], **variables: str) -> dict[str, str]:
     return {
         "FATSECRET_CONSUMER_KEY": "consumer-key-0123",
         "FATSECRET_CONSUMER_SECRET": "consumer-secret-4567",
+        "FATSECRET_MCP_SIGNING_KEY": "test-signing-key-0123456789abcdef",
         "FATSECRET_MCP_USERS": json.dumps(list(users)),
         **variables,
     }
@@ -77,7 +84,13 @@ def test_secrets_never_show_in_a_printed_household() -> None:
 
 
 @pytest.mark.parametrize(
-    "variable", ["FATSECRET_CONSUMER_KEY", "FATSECRET_CONSUMER_SECRET", "FATSECRET_MCP_USERS"]
+    "variable",
+    [
+        "FATSECRET_CONSUMER_KEY",
+        "FATSECRET_CONSUMER_SECRET",
+        "FATSECRET_MCP_USERS",
+        "FATSECRET_MCP_SIGNING_KEY",
+    ],
 )
 def test_a_missing_variable_is_named(variable: str) -> None:
     env = environ(ola())
@@ -175,3 +188,45 @@ def test_over_stdio_the_acting_user_must_be_one_of_several(acting: str | None) -
 
     assert "FATSECRET_MCP_USER" in str(raised.value)
     assert "ola, jakub" in str(raised.value)
+
+
+@pytest.mark.parametrize("value", ["", "short", "x" * 31])
+def test_the_instance_needs_a_persistent_signing_key_of_at_least_32_characters(value: str) -> None:
+    env = environ(ola(), FATSECRET_MCP_SIGNING_KEY=value)
+    message = config_error(env)
+
+    assert "FATSECRET_MCP_SIGNING_KEY" in message
+
+    if value:
+        assert value not in message
+
+
+def test_the_signing_key_is_loaded_from_household_configuration() -> None:
+    env = environ(ola(), FATSECRET_MCP_SIGNING_KEY="s" * 32)
+    household = load_household(env)
+
+    assert household.signing_key.get_secret_value() == "s" * 32
+
+
+@pytest.mark.parametrize(
+    "hours",
+    [
+        {"breakfast": "24:00"},
+        {"lunch": "12:60"},
+        {"dinner": "16:00:01"},
+        {"breakfast": "ola-token-89ab"},
+        {"breakfast": "11:30"},  # Collides with the default Lunch start.
+    ],
+)
+def test_invalid_or_colliding_meal_hours_are_rejected_without_echoing_values(hours: dict[str, str]) -> None:
+    assert "meal_hours" in config_error(environ(ola(meal_hours=hours)))
+
+
+def test_partial_meal_hours_keep_the_defaults_for_other_meals() -> None:
+    household = load_household(environ(ola(meal_hours={"breakfast": "06:00"})))
+    hours = household.user("ola").meal_hours
+
+    assert hours.breakfast == "06:00"
+    assert hours.lunch == "11:30"
+    assert hours.dinner == "16:00"
+    assert hours.snacks == "21:00"

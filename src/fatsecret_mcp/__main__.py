@@ -27,7 +27,12 @@ def main() -> None:
 async def _serve_stdio(household: Household, user: User) -> None:
     async with httpx2.AsyncClient(timeout=20) as http:
         fatsecret = FatSecretApi(household.consumer, http)
-        server = build_server(user, fatsecret, recent_food_days=household.recent_food_days)
+        server = build_server(
+            user=user,
+            fatsecret=fatsecret,
+            recent_food_days=household.recent_food_days,
+            signing_key=household.signing_key,
+        )
 
         await server.run_stdio_async()
 

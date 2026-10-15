@@ -80,6 +80,7 @@ def household() -> Household:
         {
             "FATSECRET_CONSUMER_KEY": "consumer-key",
             "FATSECRET_CONSUMER_SECRET": "consumer-secret",
+            "FATSECRET_MCP_SIGNING_KEY": "test-signing-key-0123456789abcdef",
             "FATSECRET_MCP_USERS": json.dumps(HOUSEHOLD_USERS),
         }
     )
@@ -105,7 +106,13 @@ def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) ->
     """An in-memory MCP client session with the real server, acting as one User of the Household."""
 
     def connect(user_id: str) -> Client:
-        server = build_server(household.user(user_id), fatsecret, clock, household.recent_food_days)
+        server = build_server(
+            user=household.user(user_id),
+            fatsecret=fatsecret,
+            clock=clock,
+            recent_food_days=household.recent_food_days,
+            signing_key=household.signing_key,
+        )
 
         return Client(server)
 

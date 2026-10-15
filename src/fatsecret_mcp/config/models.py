@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -16,7 +17,7 @@ from pydantic import (
     StringConstraints,
 )
 
-from fatsecret_mcp.domain.models import Nutrition
+from fatsecret_mcp.domain.models import Meal, Nutrition
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
 
 DEFAULT_TIMEZONE = ZoneInfo("Europe/Warsaw")
@@ -36,6 +37,7 @@ def _timezone(value: object) -> object:
 
 
 NonEmptySecret = Annotated[SecretStr, Field(min_length=1)]
+MealStart = Annotated[str, StringConstraints(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")]
 
 
 class ConfigModel(BaseModel):
@@ -65,6 +67,23 @@ class DailyTargets(ConfigModel):
         )
 
 
+class MealHours(ConfigModel):
+    """Local start of each Meal, up to the next Meal start (including across midnight)."""
+
+    breakfast: MealStart = "04:00"
+    lunch: MealStart = "11:30"
+    dinner: MealStart = "16:00"
+    snacks: MealStart = "21:00"
+
+    def as_starts(self) -> dict[Meal, time]:
+        return {
+            Meal.BREAKFAST: time.fromisoformat(self.breakfast),
+            Meal.LUNCH: time.fromisoformat(self.lunch),
+            Meal.DINNER: time.fromisoformat(self.dinner),
+            Meal.SNACKS: time.fromisoformat(self.snacks),
+        }
+
+
 class User(ConfigModel):
     id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
     display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -72,6 +91,7 @@ class User(ConfigModel):
     fatsecret_access_secret: NonEmptySecret
     daily_targets: DailyTargets
     timezone: Annotated[ZoneInfo, BeforeValidator(_timezone)] = DEFAULT_TIMEZONE
+    meal_hours: MealHours = Field(default_factory=MealHours)
 
     @property
     def fatsecret(self) -> AccessToken:
@@ -84,6 +104,7 @@ class User(ConfigModel):
 class Household(ConfigModel):
     consumer_key: SecretStr
     consumer_secret: SecretStr
+    signing_key: Annotated[SecretStr, Field(min_length=32)]
     users: tuple[User, ...]
     recent_food_days: Annotated[int, Field(ge=1, le=MAX_RECENT_FOOD_DAYS)] = DEFAULT_RECENT_FOOD_DAYS
     """How many Diary Days, up to today, Recent Foods come from. Each uncached day costs an API call."""

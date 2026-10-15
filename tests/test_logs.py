@@ -19,7 +19,7 @@ from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
 
 pytestmark = pytest.mark.anyio
 
-SECRETS = [CONSUMER.key, CONSUMER.secret, USER.token, USER.secret]
+SECRETS = [CONSUMER.key, CONSUMER.secret, USER.token, USER.secret, "test-signing-key-0123456789abcdef"]
 NUTRITION = ["Skyr Waniliowy", "Chicken Breast", "18.4", "39.89", "11.58", "97.01", "24.6"]
 
 # Noon in Warsaw on the last recorded test Diary Day.
@@ -35,6 +35,8 @@ CLOCK = FakeClock(datetime(2015, 1, 14, 11, 0, tzinfo=UTC))
         ("get_period_summary", "error_invalid_access_token.json"),
         ("search_foods", "foods_search_single.json"),
         ("search_foods", "error_daily_quota.json"),
+        ("draft_entries", "food_get_generic.json"),
+        ("draft_entries", "error_invalid_access_token.json"),
     ],
 )
 async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
@@ -44,6 +46,7 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     household = load_household(
         {
             "FATSECRET_CONSUMER_KEY": CONSUMER.key,
+            "FATSECRET_MCP_SIGNING_KEY": "test-signing-key-0123456789abcdef",
             "FATSECRET_CONSUMER_SECRET": CONSUMER.secret,
             "FATSECRET_MCP_USERS": json.dumps(
                 [
@@ -60,7 +63,10 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     )
     fatsecret = RecordedFatSecret()
 
-    if recorded == "foods_search_single.json":
+    if tool == "draft_entries" and not recorded.startswith("error_"):
+        serve_recent_diary_days(fatsecret)
+        fatsecret.serve(recorded)
+    elif recorded == "foods_search_single.json":
         # Same recorded response, requested with the tool's five-result limit.
         exchange = fixture(recorded)
         exchange["request"]["params"]["max_results"] = "5"
@@ -73,13 +79,21 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
 
     async with fatsecret.client() as http:
         gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
-        server = build_server(household.user("jakub"), gateway, CLOCK)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=CLOCK,
+            signing_key=household.signing_key,
+        )
 
         async with Client(server) as client:
             arguments = {
                 "get_diary_day": {"diary_day": "2015-01-12"},
                 "get_period_summary": {"from_day": "2015-01-12", "to_day": "2015-01-13"},
                 "search_foods": {"description": "chicken breast"},
+                "draft_entries": {
+                    "items": [{"food_id": "1641", "serving_id": "50321", "number_of_units": 150}],
+                },
             }
 
             result = await client.call_tool(tool, arguments[tool])

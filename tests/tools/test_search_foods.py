@@ -630,7 +630,13 @@ async def test_the_number_of_diary_days_recent_foods_come_from_is_configurable(
     fatsecret.add_food_entry(jakub, logged("Skyr z 11.10", days_ago(3)))
     fatsecret.add_food_entry(jakub, logged("Skyr z 12.10", days_ago(2)))
 
-    server = build_server(household.user("jakub"), fatsecret, clock, recent_food_days=3)
+    server = build_server(
+        user=household.user("jakub"),
+        fatsecret=fatsecret,
+        clock=clock,
+        recent_food_days=3,
+        signing_key=household.signing_key,
+    )
 
     async with Client(server) as client:
         found = await search(client, "skyr")

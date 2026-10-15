@@ -8,6 +8,8 @@
 - `FATSECRET_MCP_USER`: over stdio, the id of the User the server acts as. Optional when there's only one.
 - `FATSECRET_MCP_RECENT_FOOD_DAYS`: optional, how many Diary Days up to today Recent Foods come from
   (1 to 31, 14 by default).
+- `FATSECRET_MCP_SIGNING_KEY`: a persistent, random instance key of at least 32 characters for Drafts.
+- Each User may set `meal_hours`: local start times as HH:MM for breakfast, lunch, dinner and snacks.
 
 Errors name the bad variable or field but never print a value, since most values here are secrets.
 """
@@ -27,6 +29,7 @@ CONSUMER_SECRET_VAR = "FATSECRET_CONSUMER_SECRET"
 USERS_VAR = "FATSECRET_MCP_USERS"
 ACTING_USER_VAR = "FATSECRET_MCP_USER"
 RECENT_FOOD_DAYS_VAR = "FATSECRET_MCP_RECENT_FOOD_DAYS"
+SIGNING_KEY_VAR = "FATSECRET_MCP_SIGNING_KEY"
 
 _USERS = TypeAdapter(list[User])
 
@@ -39,6 +42,10 @@ def load_household(environ: Mapping[str, str]) -> Household:
     consumer_key = _required(environ, CONSUMER_KEY_VAR)
     consumer_secret = _required(environ, CONSUMER_SECRET_VAR)
     recent_food_days = _recent_food_days(environ)
+    signing_key = _required(environ, SIGNING_KEY_VAR)
+
+    if len(signing_key) < 32:
+        raise HouseholdConfigError(f"{SIGNING_KEY_VAR} must contain at least 32 characters")
 
     try:
         users = _USERS.validate_json(_required(environ, USERS_VAR))
@@ -50,6 +57,8 @@ def load_household(environ: Mapping[str, str]) -> Household:
     if not users:
         raise HouseholdConfigError(f"{USERS_VAR} must list at least one User")
 
+    _validate_meal_hours(users)
+
     repeated = _repeated_ids(users)
 
     if repeated:
@@ -58,6 +67,7 @@ def load_household(environ: Mapping[str, str]) -> Household:
     return Household(
         consumer_key=SecretStr(consumer_key),
         consumer_secret=SecretStr(consumer_secret),
+        signing_key=SecretStr(signing_key),
         users=tuple(users),
         recent_food_days=recent_food_days,
     )
@@ -107,6 +117,14 @@ def _repeated_ids(users: list[User]) -> list[str]:
     counts = Counter(user.id for user in users)
 
     return sorted(user_id for user_id, count in counts.items() if count > 1)
+
+
+def _validate_meal_hours(users: list[User]) -> None:
+    for index, user in enumerate(users):
+        starts = list(user.meal_hours.as_starts().values())
+
+        if len(set(starts)) != len(starts):
+            raise HouseholdConfigError(f"{USERS_VAR}[{index}].meal_hours: Meal start times must differ")
 
 
 def _describe(details: ErrorDetails) -> str:

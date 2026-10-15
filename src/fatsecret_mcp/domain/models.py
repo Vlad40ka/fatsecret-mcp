@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 
@@ -121,3 +121,35 @@ class PeriodDaySummary:
     has_food_entries: bool
     totals: Nutrition
     daily_targets: Nutrition
+
+
+@dataclass(frozen=True)
+class DraftEntry:
+    """Only the values needed to write one confirmed Food Entry; no nutrition."""
+
+    food_id: str
+    serving_id: str
+    number_of_units: float
+    entry_name: str
+
+
+@dataclass(frozen=True)
+class Draft:
+    """The self-contained proposal that is signed and returned as a Draft id."""
+
+    user_id: str
+    items: tuple[DraftEntry, ...]
+    meal: Meal
+    diary_day: date
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class DraftItem:
+    """One proposed entry, with the values shown to the User before confirmation."""
+
+    entry: DraftEntry
+    serving: str
+    amount: str
+    nutrition: Nutrition
+    assumption: str | None

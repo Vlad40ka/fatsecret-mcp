@@ -32,7 +32,13 @@ async def test_reads_todays_diary_day_from_the_real_fatsecret() -> None:
 
     async with (
         httpx2.AsyncClient(timeout=20) as http,
-        Client(build_server(user, FatSecretApi(household.consumer, http))) as client,
+        Client(
+            build_server(
+                user=user,
+                fatsecret=FatSecretApi(household.consumer, http),
+                signing_key=household.signing_key,
+            )
+        ) as client,
     ):
         result = await client.call_tool("get_diary_day", {})
 

@@ -256,7 +256,12 @@ async def test_a_failed_history_scan_cancels_remaining_reads_instead_of_sending_
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
         gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
-        server = build_server(household.user("jakub"), gateway, clock)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=clock,
+            signing_key=household.signing_key,
+        )
 
         async with Client(server) as client:
             result = await client.call_tool("search_foods", {"description": "skyr"})
@@ -284,7 +289,12 @@ async def test_throttling_a_search_also_stops_other_tools_during_the_same_cooldo
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
         gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
-        server = build_server(household.user("jakub"), gateway, clock)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=clock,
+            signing_key=household.signing_key,
+        )
 
         async with Client(server) as client:
             failed_search = await client.call_tool("search_foods", {"description": "skyr"})
