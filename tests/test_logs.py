@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from mcp import Client
+from pydantic import SecretStr
 
 from fatsecret_mcp.config.loader import load_household
+from fatsecret_mcp.domain.draft_token import seal_draft
+from fatsecret_mcp.domain.models import Draft, DraftEntry, Meal
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.parsing import day_number
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
@@ -37,6 +40,8 @@ CLOCK = FakeClock(datetime(2015, 1, 14, 11, 0, tzinfo=UTC))
         ("search_foods", "error_daily_quota.json"),
         ("draft_entries", "food_get_generic.json"),
         ("draft_entries", "error_invalid_access_token.json"),
+        ("confirm_draft", "food_entry_create.json"),
+        ("confirm_draft", "error_invalid_access_token.json"),
     ],
 )
 async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
@@ -63,7 +68,9 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     )
     fatsecret = RecordedFatSecret()
 
-    if tool == "draft_entries" and not recorded.startswith("error_"):
+    if tool == "confirm_draft" and not recorded.startswith("error_"):
+        fatsecret.serve(recorded)
+    elif tool == "draft_entries" and not recorded.startswith("error_"):
         serve_recent_diary_days(fatsecret)
         fatsecret.serve(recorded)
     elif recorded == "foods_search_single.json":
@@ -94,6 +101,7 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
                 "draft_entries": {
                     "items": [{"food_id": "1641", "serving_id": "50321", "number_of_units": 150}],
                 },
+                "confirm_draft": {"draft_id": recorded_skyr_draft(household.signing_key)},
             }
 
             result = await client.call_tool(tool, arguments[tool])
@@ -103,6 +111,25 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     assert caplog.records, "expected the call to log something, or this test proves nothing"
     for leak in SECRETS + NUTRITION:
         assert leak not in caplog.text
+
+
+def recorded_skyr_draft(signing_key: SecretStr) -> str:
+    """A Draft of the recorded `food_entry.create`: two units of Skyr for lunch on 2015-01-12."""
+    entry = DraftEntry(
+        food_id="51467582",
+        serving_id="43596665",
+        number_of_units=2,
+        entry_name="Skyr Waniliowy",
+    )
+    draft = Draft(
+        user_id="jakub",
+        items=(entry,),
+        meal=Meal.LUNCH,
+        diary_day=date(2015, 1, 12),
+        expires_at=CLOCK.now + timedelta(minutes=30),
+    )
+
+    return seal_draft(draft, signing_key.get_secret_value())
 
 
 def serve_recent_diary_days(fatsecret: RecordedFatSecret) -> None:

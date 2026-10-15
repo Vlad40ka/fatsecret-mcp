@@ -13,7 +13,13 @@ from fatsecret_mcp.config.models import DEFAULT_RECENT_FOOD_DAYS, User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
 from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
-from fatsecret_mcp.tools import draft_entries, get_diary_day, get_period_summary, search_foods
+from fatsecret_mcp.tools import (
+    confirm_draft,
+    draft_entries,
+    get_diary_day,
+    get_period_summary,
+    search_foods,
+)
 from fatsecret_mcp.tools.schemas import ATTRIBUTION
 
 DESCRIPTION = (
@@ -34,7 +40,9 @@ loggable matches.
 - draft_entries proposes Food Entries, assumptions, a Meal and Diary Day, plus the day after adding \
 against Daily Targets. Show the Draft and ask about a suggested Meal. When previous_day_suggested \
 is true, ask about Snacks on the previous Diary Day. Corrections need a new Draft. This tool does \
-not write to the Food Diary; saving a confirmed Draft is not available yet.
+not write to the Food Diary.
+- confirm_draft writes a Draft's Food Entries to the Food Diary. Call it only after the User \
+explicitly approved that Draft in their latest message.
 - Macros are protein, fat and carbohydrate, in grams.
 - Report the numbers neutrally and in the User's language. This server gives no diet, nutrition or \
 health advice.
@@ -51,7 +59,7 @@ def build_server(
     *,
     signing_key: SecretStr,
 ) -> MCPServer:
-    """The MCP server acting as `user`, reading their diary and sealing proposed Food Entries."""
+    """The MCP server acting as `user`: it reads their diary and writes the Drafts they confirm."""
     diary = UserDiary(
         fatsecret=fatsecret,
         user=user.fatsecret,
@@ -78,5 +86,6 @@ def build_server(
     get_period_summary.register(server, user, diary)
     search_foods.register(server, fatsecret, diary)
     draft_entries.register(server, user, fatsecret, diary, clock, signing_key)
+    confirm_draft.register(server, user, fatsecret, diary, clock, signing_key)
 
     return server

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
-from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition
 
 
 @dataclass(frozen=True)
@@ -46,5 +46,12 @@ class FatSecretGateway(Protocol):
 
         Missing days have no Food Entries. All-zero days may also have no Food Entries after deletion;
         use `list_food_entries` to distinguish those from entries with zero nutrition.
+        """
+        ...
+
+    async def create_food_entry(self, user: AccessToken, entry: DraftEntry, meal: Meal, day: date) -> str:
+        """Write one Food Entry to the User's Food Diary under `entry.entry_name`; returns its id.
+
+        It works for any Food the User could log in the app, including Foods the catalog can't return.
         """
         ...

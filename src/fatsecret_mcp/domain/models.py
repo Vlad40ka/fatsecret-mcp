@@ -153,3 +153,20 @@ class DraftItem:
     amount: str
     nutrition: Nutrition
     assumption: str | None
+
+
+@dataclass(frozen=True)
+class ConfirmedEntry:
+    entry: DraftEntry
+    food_entry_id: str | None
+    """The created Food Entry's id; None when this item wasn't written."""
+
+
+@dataclass(frozen=True)
+class Confirmation:
+    """What confirming a Draft wrote to the Food Diary."""
+
+    draft: Draft
+    entries: tuple[ConfirmedEntry, ...]
+    failure: str | None
+    """Why writing stopped part-way through; None when every item was written."""

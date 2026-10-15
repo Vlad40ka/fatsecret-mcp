@@ -1,4 +1,4 @@
-"""FatSecret's JSON turned into domain objects.
+"""FatSecret's JSON turned into domain objects, and domain values written as FatSecret expects them.
 
 This is where FatSecret's quirks are smoothed over: numbers arrive as strings, a list with one item
 may arrive as a bare object, an empty list as `null` or a missing key, and a Diary Day is a number.
@@ -21,11 +21,30 @@ STRAY_PLURAL = re.compile(r"^(\d+)s\s+")
 LEADING_FRACTION = re.compile(r"^(?:(?P<whole>\d+) )?(?P<numerator>\d+)/(?P<denominator>\d+)\b")
 
 MEALS = {"breakfast": Meal.BREAKFAST, "lunch": Meal.LUNCH, "dinner": Meal.DINNER, "other": Meal.SNACKS}
+MEAL_NAMES = {Meal.BREAKFAST: "breakfast", Meal.LUNCH: "lunch", Meal.DINNER: "dinner", Meal.SNACKS: "other"}
 
 
 def day_number(day: date) -> int:
     """FatSecret identifies a Diary Day by the number of days since 1970-01-01."""
     return (day - EPOCH).days
+
+
+def meal_text(meal: Meal) -> str:
+    """FatSecret calls Snacks "other"."""
+    return MEAL_NAMES[meal]
+
+
+def number_text(value: float) -> str:
+    """A whole number without a trailing ".0", as FatSecret sends numbers itself: 2.0 is "2"."""
+    if value.is_integer():
+        return str(int(value))
+
+    return str(value)
+
+
+def created_food_entry_id(body: dict[str, Any]) -> str:
+    """The id in a `food_entry.create` response: `{"food_entry_id": {"value": "…"}}`."""
+    return _text(_object(body, "food_entry_id"), "value")
 
 
 def error_code(error: object) -> int | None:

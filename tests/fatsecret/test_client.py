@@ -7,7 +7,7 @@ from datetime import date
 import httpx2
 import pytest
 
-from fatsecret_mcp.domain.models import Nutrition
+from fatsecret_mcp.domain.models import DraftEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import (
     CredentialsRejected,
@@ -127,6 +127,29 @@ async def test_a_single_food_entry_sent_as_a_bare_object_is_still_listed() -> No
         entries = await FatSecretApi(CONSUMER, http).list_food_entries(USER, date(2015, 1, 13))
 
     assert [entry.name for entry in entries] == ["Skyr Waniliowy"]
+
+
+async def test_a_snack_with_a_fractional_amount_is_created_as_fatsecret_expects() -> None:
+    # The recorded request, as it's sent for Snacks ("other") and one and a half units.
+    exchange = fixture("food_entry_create.json")
+    exchange["request"]["params"]["meal"] = "other"
+    exchange["request"]["params"]["number_of_units"] = "1.5"
+    entry = DraftEntry(
+        food_id="51467582",
+        serving_id="43596665",
+        number_of_units=1.5,
+        entry_name="Skyr Waniliowy",
+    )
+    recorded = RecordedFatSecret()
+
+    recorded.serve(exchange)
+
+    async with recorded.client() as http:
+        entry_id = await FatSecretApi(CONSUMER, http).create_food_entry(
+            USER, entry, Meal.SNACKS, date(2015, 1, 12)
+        )
+
+    assert entry_id == "9000001"
 
 
 @pytest.mark.parametrize(

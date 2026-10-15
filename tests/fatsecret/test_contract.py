@@ -12,7 +12,7 @@ from typing import Protocol
 
 import pytest
 
-from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition, Serving
+from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken, NotFound
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
@@ -182,6 +182,7 @@ class World(Protocol):
     def given_revoked_access_token(self) -> None: ...
     def given_catalog(self) -> None: ...
     def given_quota_exceeded(self) -> None: ...
+    def given_a_recorded_food_entry_create(self) -> None: ...
 
 
 class FakeWorld:
@@ -204,6 +205,10 @@ class FakeWorld:
 
     def given_quota_exceeded(self) -> None:
         self.fake.fail_with(DailyQuotaExceeded())
+
+    def given_a_recorded_food_entry_create(self) -> None:
+        # FatSecret knows the Skyr from the User's Food Diary, though its catalog can't return it.
+        self.given_recorded_diary_day(ONE_ENTRY_DAY)
 
     def given_recorded_month(self, scenario: str) -> None:
         if scenario != "empty":
@@ -241,6 +246,9 @@ class RecordedWorld:
 
     def given_quota_exceeded(self) -> None:
         self.recorded.answer_everything_with("error_daily_quota.json")
+
+    def given_a_recorded_food_entry_create(self) -> None:
+        self.recorded.serve("food_entry_create.json")
 
     def given_recorded_month(self, scenario: str) -> None:
         suffix = "" if scenario == "full" else f"_{scenario}"
@@ -348,3 +356,27 @@ async def test_catalog_operations_report_quota_exhaustion(world: World, operatio
 
     with pytest.raises(DailyQuotaExceeded):
         await call(argument)
+
+
+SKYR_TWO_UNITS = DraftEntry(
+    food_id="51467582",
+    serving_id="43596665",
+    number_of_units=2,
+    entry_name="Skyr Waniliowy",
+)
+
+
+async def test_creates_a_food_entry_for_a_food_outside_the_us_catalog(world: World) -> None:
+    world.given_a_recorded_food_entry_create()
+
+    entry_id = await world.gateway.create_food_entry(USER, SKYR_TWO_UNITS, Meal.LUNCH, THREE_MEALS_DAY)
+
+    assert isinstance(entry_id, str)
+    assert entry_id
+
+
+async def test_creating_a_food_entry_rejects_a_revoked_access_token(world: World) -> None:
+    world.given_revoked_access_token()
+
+    with pytest.raises(InvalidAccessToken):
+        await world.gateway.create_food_entry(USER, SKYR_TWO_UNITS, Meal.LUNCH, THREE_MEALS_DAY)

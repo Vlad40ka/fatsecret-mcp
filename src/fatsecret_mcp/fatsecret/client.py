@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import httpx2
 
-from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret import errors, parsing
 from fatsecret_mcp.fatsecret.errors import FatSecretError, UpstreamFailure
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
@@ -65,14 +65,29 @@ class FatSecretApi:
 
         return parsing.month_totals(body)
 
-    async def _call(self, method: str, params: Mapping[str, str], user: AccessToken | None) -> dict[str, Any]:
+    async def create_food_entry(self, user: AccessToken, entry: DraftEntry, meal: Meal, day: date) -> str:
+        params = {
+            "food_id": entry.food_id,
+            "food_entry_name": entry.entry_name,
+            "serving_id": entry.serving_id,
+            "number_of_units": parsing.number_text(entry.number_of_units),
+            "meal": parsing.meal_text(meal),
+            "date": str(parsing.day_number(day)),
+        }
+        body = await self._call("food_entry.create", params, user, http_method="POST")
+
+        return parsing.created_food_entry_id(body)
+
+    async def _call(
+        self, method: str, params: Mapping[str, str], user: AccessToken | None, *, http_method: str = "GET"
+    ) -> dict[str, Any]:
         try:
             async with self._request_limits.request():
                 # Sign after any pacing wait so OAuth timestamps are fresh when the request is sent.
                 url = signed_url(
-                    "GET", API_URL, {"method": method, "format": "json", **params}, self._consumer, user
+                    http_method, API_URL, {"method": method, "format": "json", **params}, self._consumer, user
                 )
-                body = _json_object(await self._get(url))
+                body = _json_object(await self._send(http_method, url))
 
                 if "error" in body:
                     raise _error(body["error"])
@@ -82,9 +97,9 @@ class FatSecretApi:
 
         return body
 
-    async def _get(self, url: str) -> httpx2.Response:
+    async def _send(self, http_method: str, url: str) -> httpx2.Response:
         try:
-            return await self._http.get(url)
+            return await self._http.request(http_method, url)
         except httpx2.TimeoutException:
             raise UpstreamFailure("the request timed out") from None
         except httpx2.HTTPError as error:

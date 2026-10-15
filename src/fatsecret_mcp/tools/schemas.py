@@ -15,6 +15,8 @@ from mcp_types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field
 
 from fatsecret_mcp.domain.models import (
+    Confirmation,
+    ConfirmedEntry,
     DaySummary,
     DraftItem,
     Food,
@@ -64,6 +66,8 @@ class FoodDraftInput(BaseModel):
 
 
 DraftItems = Annotated[list[FoodDraftInput], Field(min_length=1)]
+
+DraftId = Annotated[str, Field(min_length=1, description="The draft_id returned by draft_entries.")]
 
 
 # --- Results ---------------------------------------------------------------
@@ -286,6 +290,47 @@ class FoodDraft(BaseModel):
     attribution: str = ATTRIBUTION
 
 
+class ConfirmedFoodEntry(BaseModel):
+    name: str
+    number_of_units: float
+    food_entry_id: str | None = Field(description="The created Food Entry; null when it wasn't written.")
+
+    @classmethod
+    def of(cls, confirmed: ConfirmedEntry) -> ConfirmedFoodEntry:
+        return cls(
+            name=confirmed.entry.entry_name,
+            number_of_units=confirmed.entry.number_of_units,
+            food_entry_id=confirmed.food_entry_id,
+        )
+
+
+class DraftConfirmation(BaseModel):
+    status: Literal["confirmed", "partially_written", "already_confirmed"] = Field(
+        description=(
+            "partially_written: writing stopped at an item without a food_entry_id. "
+            "already_confirmed: an earlier call wrote these entries; nothing new was written."
+        )
+    )
+    meal: Meal
+    diary_day: date
+    entries: list[ConfirmedFoodEntry]
+    failure: str | None = Field(description="Why writing stopped part-way through.")
+    attribution: str = ATTRIBUTION
+
+    @classmethod
+    def of(cls, confirmation: Confirmation, *, repeated: bool) -> DraftConfirmation:
+        entries = [ConfirmedFoodEntry.of(confirmed) for confirmed in confirmation.entries]
+        status = _confirmation_status(confirmation, repeated=repeated)
+
+        return cls(
+            status=status,
+            meal=confirmation.draft.meal,
+            diary_day=confirmation.draft.diary_day,
+            entries=entries,
+            failure=confirmation.failure,
+        )
+
+
 def as_tool_result(result: BaseModel) -> CallToolResult:
     """`result` as the tool's answer: structured, plus the same JSON as compact text for the model.
 
@@ -298,6 +343,17 @@ def as_tool_result(result: BaseModel) -> CallToolResult:
         content=[TextContent(type="text", text=text)],
         structured_content=structured,
     )
+
+
+def _confirmation_status(
+    confirmation: Confirmation, *, repeated: bool
+) -> Literal["confirmed", "partially_written", "already_confirmed"]:
+    if repeated:
+        return "already_confirmed"
+    if confirmation.failure is not None:
+        return "partially_written"
+
+    return "confirmed"
 
 
 def _rounded(grams: float) -> float:

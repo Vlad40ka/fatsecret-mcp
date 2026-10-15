@@ -11,7 +11,7 @@ from itertools import count
 
 import anyio.lowlevel
 
-from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition
+from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret.errors import (
     CredentialsRejected,
     FatSecretError,
@@ -84,8 +84,8 @@ class FakeFatSecret:
         """Every call from now on raises `error`, as if FatSecret had answered with it."""
         self._failure = error
 
-    def limit_requests_to(self, requests: int) -> None:
-        """Answer with error 12 once this many requests have been made."""
+    def limit_requests_to(self, requests: int | None) -> None:
+        """Answer with error 12 once this many requests have been made; None lifts the limit."""
         self._request_limit = requests
 
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
@@ -110,6 +110,46 @@ class FakeFatSecret:
 
         return totals
 
+    async def create_food_entry(self, user: AccessToken, entry: DraftEntry, meal: Meal, day: date) -> str:
+        await self._request()
+        self._authenticate(user)
+
+        per_unit = self._nutrition_per_unit(user, entry.food_id, entry.serving_id)
+        nutrition = _scaled(per_unit, entry.number_of_units)
+        created = food_entry(
+            name=entry.entry_name,
+            meal=meal,
+            diary_day=day,
+            kcal=nutrition.kcal,
+            protein=nutrition.protein,
+            fat=nutrition.fat,
+            carbohydrate=nutrition.carbohydrate,
+            amount=f"{entry.number_of_units:g} units",
+            food_id=entry.food_id,
+            serving_id=entry.serving_id,
+            number_of_units=entry.number_of_units,
+        )
+
+        self._diaries[user.token].append(created)
+
+        return created.id
+
+    def _nutrition_per_unit(self, user: AccessToken, food_id: str, serving_id: str) -> Nutrition:
+        """Like FatSecret, the Fake knows a Food from its catalog or from the User's own Food Entries."""
+        food = self._catalog.get(food_id)
+        servings = food.servings if food is not None else []
+        entries = self._diaries[user.token]
+
+        for serving in servings:
+            if serving.id == serving_id:
+                return _scaled(serving.nutrition, 1 / serving.number_of_units)
+
+        for logged in entries:
+            if logged.food_id == food_id and logged.serving_id == serving_id:
+                return _scaled(logged.nutrition, 1 / logged.number_of_units)
+
+        raise NotFound()
+
     async def _request(self) -> None:
         self.requests += 1
         self._in_flight += 1
@@ -131,6 +171,15 @@ class FakeFatSecret:
             raise InvalidAccessToken()
         if account.secret != user.secret:
             raise CredentialsRejected(8)
+
+
+def _scaled(nutrition: Nutrition, factor: float) -> Nutrition:
+    return Nutrition(
+        kcal=nutrition.kcal * factor,
+        protein=nutrition.protein * factor,
+        fat=nutrition.fat * factor,
+        carbohydrate=nutrition.carbohydrate * factor,
+    )
 
 
 _ids = count(1)
