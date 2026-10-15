@@ -9,7 +9,7 @@ from importlib.metadata import version
 from mcp.server import MCPServer
 from pydantic import SecretStr
 
-from fatsecret_mcp.config.models import DEFAULT_RECENT_FOOD_DAYS, User
+from fatsecret_mcp.config.models import User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
 from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
@@ -34,7 +34,7 @@ This server reads the User's own FatSecret Food Diary, the one they see in the F
 Targets and what remains. Omit diary_day for today: the server knows the User's timezone.
 - get_period_summary shows daily totals and Daily Targets for an inclusive range of up to 31 Diary \
 Days. Days with has_food_entries=false have no Food Entries. Compare periods with two calls.
-- search_foods finds Foods with loggable Servings: the User's Recent Foods first, then the catalog. \
+- search_foods finds catalog Foods with loggable Servings. \
 Pass an English rendering for non-English descriptions. A not_found result means there are no \
 loggable matches.
 - draft_entries proposes Food Entries, assumptions, a Meal and Diary Day, plus the day after adding \
@@ -55,7 +55,6 @@ def build_server(
     user: User,
     fatsecret: FatSecretGateway,
     clock: Clock = system_clock,
-    recent_food_days: int = DEFAULT_RECENT_FOOD_DAYS,
     *,
     signing_key: SecretStr,
 ) -> MCPServer:
@@ -65,7 +64,6 @@ def build_server(
         user=user.fatsecret,
         timezone=user.timezone,
         clock=clock,
-        recent_food_days=recent_food_days,
     )
 
     @asynccontextmanager
@@ -84,7 +82,7 @@ def build_server(
 
     get_diary_day.register(server, user, diary, clock)
     get_period_summary.register(server, user, diary)
-    search_foods.register(server, fatsecret, diary)
+    search_foods.register(server, fatsecret)
     draft_entries.register(server, user, fatsecret, diary, clock, signing_key)
     confirm_draft.register(server, user, fatsecret, diary, clock, signing_key)
 

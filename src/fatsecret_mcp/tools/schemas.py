@@ -24,7 +24,6 @@ from fatsecret_mcp.domain.models import (
     Meal,
     Nutrition,
     PeriodDaySummary,
-    RecentFood,
     Serving,
 )
 
@@ -58,11 +57,6 @@ class FoodDraftInput(BaseModel):
         allow_inf_nan=False,
     )
     assumption: str | None = None
-    entry_name: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Copy the chosen match's name from search_foods. Omitted names use Recent Foods first.",
-    )
 
 
 DraftItems = Annotated[list[FoodDraftInput], Field(min_length=1)]
@@ -195,37 +189,18 @@ class FoodServing(BaseModel):
 
 
 class FoodMatch(BaseModel):
-    source: Literal["recent_foods", "catalog"] = Field(
-        description="recent_foods: logged by the User in recent weeks; catalog: FatSecret's catalog."
-    )
     food_id: str
-    name: str = Field(description="For a Recent Food, the name it was logged with.")
+    name: str
     brand: str | None
     servings: list[FoodServing] = Field(
-        description=(
-            "Loggable Servings, with kcal and Macros per described Serving. "
-            "A Recent Food's are the ones the User logged it with, each as last logged."
-        )
+        description="Loggable Servings, with kcal and Macros per described Serving."
     )
-
-    @classmethod
-    def of_recent_food(cls, food: RecentFood) -> FoodMatch:
-        food_servings = [FoodServing.of(serving) for serving in food.servings]
-
-        return cls(
-            source="recent_foods",
-            food_id=food.food_id,
-            name=food.name,
-            brand=None,
-            servings=food_servings,
-        )
 
     @classmethod
     def of_catalog_food(cls, food: Food, servings: list[Serving]) -> FoodMatch:
         food_servings = [FoodServing.of(serving) for serving in servings]
 
         return cls(
-            source="catalog",
             food_id=food.id,
             name=food.name,
             brand=food.brand,

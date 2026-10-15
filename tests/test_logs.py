@@ -14,7 +14,6 @@ from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.domain.draft_token import seal_draft
 from fatsecret_mcp.domain.models import Draft, DraftEntry, Meal
 from fatsecret_mcp.fatsecret.client import FatSecretApi
-from fatsecret_mcp.fatsecret.parsing import day_number
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
@@ -71,14 +70,13 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
     if tool == "confirm_draft" and not recorded.startswith("error_"):
         fatsecret.serve(recorded)
     elif tool == "draft_entries" and not recorded.startswith("error_"):
-        serve_recent_diary_days(fatsecret)
         fatsecret.serve(recorded)
+        fatsecret.serve("food_entries_get_empty.json")
     elif recorded == "foods_search_single.json":
         # Same recorded response, requested with the tool's five-result limit.
         exchange = fixture(recorded)
         exchange["request"]["params"]["max_results"] = "5"
 
-        serve_recent_diary_days(fatsecret)
         fatsecret.serve(exchange)
         fatsecret.serve("food_get_generic.json")
     else:
@@ -130,16 +128,3 @@ def recorded_skyr_draft(signing_key: SecretStr) -> str:
     )
 
     return seal_draft(draft, signing_key.get_secret_value())
-
-
-def serve_recent_diary_days(fatsecret: RecordedFatSecret) -> None:
-    """The 14 Diary Days up to CLOCK's: the recorded test days, 2015-01-12 to 14, after empty ones."""
-    fatsecret.serve("food_entries_get.json")
-    fatsecret.serve("food_entries_get_single.json")
-    fatsecret.serve("food_entries_get_empty.json")
-
-    for day in range(1, 12):
-        exchange = fixture("food_entries_get_empty.json")
-        exchange["request"]["params"]["date"] = str(day_number(date(2015, 1, day)))
-
-        fatsecret.serve(exchange)

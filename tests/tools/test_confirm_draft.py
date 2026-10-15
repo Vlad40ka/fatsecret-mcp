@@ -16,7 +16,7 @@ from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.errors import InvalidAccessToken, UpstreamFailure
 from tests.conftest import FakeClock
-from tests.fatsecret.fake import FakeFatSecret, food_entry
+from tests.fatsecret.fake import FakeFatSecret
 from tests.tools.test_draft_entries import decode_base64url
 
 pytestmark = pytest.mark.anyio
@@ -140,33 +140,6 @@ async def test_confirming_writes_only_to_the_calling_users_food_diary(
     assert olas_after == olas_before == []
     assert jakubs_after[0]["food_entries"][0]["name"] == "Cooked Rice"
     assert jakubs_after[0]["food_entries"][0]["kcal"] == 195
-
-
-async def test_a_non_us_recent_food_is_confirmed_under_its_logged_name(
-    connect: Connect, fatsecret: FakeFatSecret, household: Household
-) -> None:
-    skyr = food_entry(
-        name="Skyr Waniliowy",
-        meal=Meal.SNACKS,
-        diary_day=YESTERDAY,
-        food_id="skyr",
-        serving_id="skyr-100g",
-        number_of_units=2,
-        amount="200 g",
-        kcal=148,
-    )
-    items = [{"food_id": "skyr", "serving_id": "skyr-100g", "number_of_units": 1.5}]
-
-    fatsecret.add_food_entry(household.user("jakub").fatsecret, skyr)
-
-    async with connect("jakub") as client:
-        await confirm(client, await draft(client, items, meal="breakfast"))
-
-        meals = await diary_day(client)
-
-    assert meals[0]["meal"] == "breakfast"
-    assert meals[0]["food_entries"][0]["name"] == "Skyr Waniliowy"
-    assert meals[0]["food_entries"][0]["kcal"] == 111
 
 
 async def test_a_confirmed_past_day_is_read_again_instead_of_from_memory(

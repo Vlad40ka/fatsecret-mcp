@@ -29,19 +29,24 @@ Generate a random signing key once with `python3 -c 'import secrets; print(secre
 
 Each user's optional `meal_hours` sets local meal start times, for example `"meal_hours": {"breakfast": "06:00", "lunch": "12:00", "dinner": "18:00", "snacks": "22:00"}` inside their user object. A meal lasts until the next start, including across midnight; times must differ. Omitted starts default to 04:00, 11:30, 16:00 and 21:00 respectively. Between midnight and 04:00, drafts ask whether to use Snacks on the previous day. An explicit meal or diary day overrides suggestions.
 
-To try drafting, ask Claude to find a food and propose an amount. `draft_entries` takes `items` with `food_id`, `serving_id`, `number_of_units` and an optional `assumption`. Units follow the serving returned by `search_foods`: a serving described as "100 g" with 100 units needs 150 units for 150 g. Copy the chosen match's name into `entry_name` to preserve the selection when a recent product and a catalog food share ids. Without a name, Recent Foods take priority; multiple recent products with the same ids require a name. Amounts must be positive and finite, with at most 10,000 units, 10,000 g or ml where weight or volume is known, and 20,000 kcal per item.
+To try drafting, ask Claude to find a food and propose an amount. `draft_entries` takes `items` with `food_id`, `serving_id`, `number_of_units` and an optional `assumption`. Units follow the serving returned by `search_foods`: a serving described as "100 g" with 100 units needs 150 units for 150 g. Amounts must be positive and finite, with at most 10,000 units, 10,000 g or ml where weight or volume is known, and 20,000 kcal per item.
 
 When you approve a draft, Claude calls `confirm_draft` with its `draft_id`, and Claude Code asks you to allow the write. Each item becomes one food entry in your FatSecret diary, under the draft's name, meal and day. A draft can be confirmed only by the user it was made for and only before it expires. Confirming it again writes nothing and returns the earlier result. That holds until the draft expires or the server restarts. If FatSecret fails part-way through, the result lists which entries were saved; draft the rest again.
 
-Food search looks through what you logged in the last 14 days, including today, before the FatSecret catalog. To change that, set `FATSECRET_MCP_RECENT_FOOD_DAYS` (1 to 31). History is loaded only when needed; each uncached day costs one FatSecret API call.
+Food search uses only the FatSecret catalog that a free API key can reach: US foods, searched in English. Pass a description in your own language and Claude adds an English rendering. Search never reads your diary, so each search costs one catalog request plus one per food shown (up to five).
 
-Past-day entries are shared across food searches and diary questions in memory until the server stops or twelve hours pass from fetching them. Today is always read fresh. If you edit a past day in the FatSecret app, ask Claude to refresh it: `search_foods`, `get_diary_day` and `get_period_summary` accept `refresh=true`. Period summaries reuse cached entries and fetch month totals for dates not yet loaded.
+Past-day entries are shared across diary questions in memory until the server stops or twelve hours pass from fetching them. Today is always read fresh. If you edit a past day in the FatSecret app, ask Claude to refresh it: `get_diary_day` and `get_period_summary` accept `refresh=true`. Period summaries reuse cached entries and fetch month totals for dates not yet loaded.
 
 Then add the server to Claude Code:
 
 ```sh
 claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file .env fatsecret-mcp
 ```
+
+## Roadmap
+
+- **Your own recent foods.** Products you often log, such as local or branded ones the US catalog lacks, aren't searched yet. Reading them from your FatSecret diary took too many API requests, so this needs another approach, for example another food database whose product is then logged to FatSecret as a new entry.
+- **Remember products logged from a label.** A product logged from a photo of its nutrition label will need its label again next time. The server could remember such products per user, which needs persistent storage.
 
 ## Development
 

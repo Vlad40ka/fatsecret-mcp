@@ -21,8 +21,6 @@ from fatsecret_mcp.domain.models import Meal, Nutrition
 from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
 
 DEFAULT_TIMEZONE = ZoneInfo("Europe/Warsaw")
-DEFAULT_RECENT_FOOD_DAYS = 14
-MAX_RECENT_FOOD_DAYS = 31
 
 
 def _timezone(value: object) -> object:
@@ -106,8 +104,6 @@ class Household(ConfigModel):
     consumer_secret: SecretStr
     signing_key: Annotated[SecretStr, Field(min_length=32)]
     users: tuple[User, ...]
-    recent_food_days: Annotated[int, Field(ge=1, le=MAX_RECENT_FOOD_DAYS)] = DEFAULT_RECENT_FOOD_DAYS
-    """How many Diary Days, up to today, Recent Foods come from. Each uncached day costs an API call."""
 
     @property
     def consumer(self) -> ConsumerKey:

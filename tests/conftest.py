@@ -110,7 +110,6 @@ def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) ->
             user=household.user(user_id),
             fatsecret=fatsecret,
             clock=clock,
-            recent_food_days=household.recent_food_days,
             signing_key=household.signing_key,
         )
 

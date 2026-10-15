@@ -30,7 +30,6 @@ async def _serve_stdio(household: Household, user: User) -> None:
         server = build_server(
             user=user,
             fatsecret=fatsecret,
-            recent_food_days=household.recent_food_days,
             signing_key=household.signing_key,
         )
 

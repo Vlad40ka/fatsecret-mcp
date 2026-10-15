@@ -31,33 +31,6 @@ async def get_period(client: Client, from_day: str, to_day: str) -> dict[str, An
     return result.structured_content
 
 
-async def test_a_cached_history_answers_a_period_question_without_more_requests(
-    connect: Connect, fatsecret: FakeFatSecret, household: Household
-) -> None:
-    user = household.user("jakub").fatsecret
-    yesterday = DAY - timedelta(days=1)
-    water_day = DAY - timedelta(days=2)
-    deleted_day = DAY - timedelta(days=3)
-
-    fatsecret.add_food_entry(user, food_entry("Skyr", Meal.SNACKS, yesterday, kcal=200))
-    fatsecret.add_food_entry(user, food_entry("Water", Meal.SNACKS, water_day, kcal=0))
-    fatsecret.add_food_entry(user, food_entry("Deleted", Meal.SNACKS, deleted_day, kcal=300))
-    fatsecret.delete_food_entries(user, deleted_day)
-    fatsecret.limit_requests_to(15)
-
-    async with connect("jakub") as client:
-        search = await client.call_tool("search_foods", {"description": "skyr"})
-        period = await get_period(client, "2026-10-01", yesterday.isoformat())
-
-    has_food_entries = [day["has_food_entries"] for day in period["days"]]
-    daily_kcal = [day["totals"]["kcal"] for day in period["days"]]
-
-    assert not search.is_error
-    assert has_food_entries == [False] * 11 + [True, True]
-    assert daily_kcal == [0] * 12 + [200]
-    assert fatsecret.requests == 15
-
-
 async def test_a_mixed_period_reuses_cached_days_and_fetches_only_the_missing_month(
     connect: Connect, fatsecret: FakeFatSecret, household: Household
 ) -> None:

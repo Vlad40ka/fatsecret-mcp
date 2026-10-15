@@ -147,23 +147,6 @@ def test_user_ids_are_unique() -> None:
     assert "ola" in config_error(environ(ola(), ola(display_name="Ola again")))
 
 
-@pytest.mark.parametrize(("value", "days"), [(None, 14), ("", 14), ("1", 1), (" 30 ", 30), ("31", 31)])
-def test_recent_foods_come_from_14_diary_days_unless_configured(value: str | None, days: int) -> None:
-    env = environ(ola())
-
-    if value is not None:
-        env["FATSECRET_MCP_RECENT_FOOD_DAYS"] = value
-
-    assert load_household(env).recent_food_days == days
-
-
-@pytest.mark.parametrize("value", ["0", "32", "-1", "7.5", "two weeks"])
-def test_the_recent_foods_window_must_be_1_to_31_days(value: str) -> None:
-    env = environ(ola(), FATSECRET_MCP_RECENT_FOOD_DAYS=value)
-
-    assert "FATSECRET_MCP_RECENT_FOOD_DAYS" in config_error(env)
-
-
 def test_over_stdio_the_server_acts_as_the_user_named_in_the_environment() -> None:
     env = environ(ola(), ola(id="jakub"), FATSECRET_MCP_USER="jakub")
 

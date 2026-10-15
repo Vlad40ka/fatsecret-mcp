@@ -29,30 +29,30 @@ def diary(fatsecret: FakeFatSecret, household: Household, clock: FakeClock) -> U
         user=user.fatsecret,
         timezone=user.timezone,
         clock=clock,
-        recent_food_days=household.recent_food_days,
     )
 
 
-async def test_invalidating_a_written_past_day_makes_its_new_foods_available_immediately(
+async def test_invalidating_a_written_past_day_reads_it_again(
     diary: UserDiary, fatsecret: FakeFatSecret, household: Household
 ) -> None:
     user = household.user("jakub").fatsecret
 
     fatsecret.add_food_entry(user, food_entry("Skyr Stary", Meal.SNACKS, YESTERDAY, kcal=100))
-    before = await diary.recent_foods()
+    before = await diary.entries(YESTERDAY)
 
     fatsecret.delete_food_entries(user, YESTERDAY)
     fatsecret.add_food_entry(user, food_entry("Skyr Nowy", Meal.SNACKS, YESTERDAY, kcal=200))
+    cached = await diary.entries(YESTERDAY)
     await diary.invalidate(YESTERDAY)
-    after = await diary.recent_foods()
+    after = await diary.entries(YESTERDAY)
 
-    before_names = [food.name for food in before]
-    after_names = [food.name for food in after]
+    before_names = [entry.name for entry in before]
+    cached_names = [entry.name for entry in cached]
+    after_names = [entry.name for entry in after]
 
-    assert before_names == ["Skyr Stary"]
+    assert before_names == cached_names == ["Skyr Stary"]
     assert after_names == ["Skyr Nowy"]
-    assert after[0].servings[0].nutrition.kcal == 200
-    assert fatsecret.requests == 14 + 2
+    assert fatsecret.requests == 2
 
 
 async def test_invalidation_discards_an_older_read_that_was_in_flight_when_the_day_was_written(
@@ -69,7 +69,7 @@ async def test_invalidation_discards_an_older_read_that_was_in_flight_when_the_d
     async def pause_old_read(token: AccessToken, day: date) -> list[FoodEntry]:
         entries = await list_entries(token, day)
 
-        if day == YESTERDAY:
+        if not release_read.is_set():
             reading.set()
             await release_read.wait()
 
@@ -83,7 +83,7 @@ async def test_invalidation_discards_an_older_read_that_was_in_flight_when_the_d
 
     with anyio.fail_after(2):
         async with anyio.create_task_group() as group:
-            group.start_soon(diary.recent_foods)
+            group.start_soon(diary.entries, YESTERDAY)
             await reading.wait()
 
             fatsecret.delete_food_entries(user, YESTERDAY)
@@ -95,14 +95,14 @@ async def test_invalidation_discards_an_older_read_that_was_in_flight_when_the_d
 
             release_read.set()
 
-    after = await diary.recent_foods()
-    names = [food.name for food in after]
+    after = await diary.entries(YESTERDAY)
+    names = [entry.name for entry in after]
 
     assert invalidated.is_set()
     assert names == ["Skyr Nowy"]
 
 
-async def test_changing_a_returned_day_list_does_not_change_the_cached_history(
+async def test_changing_a_returned_day_list_does_not_change_the_cached_day(
     diary: UserDiary, fatsecret: FakeFatSecret, household: Household
 ) -> None:
     user = household.user("jakub").fatsecret
@@ -111,28 +111,11 @@ async def test_changing_a_returned_day_list_does_not_change_the_cached_history(
     day = await diary.entries(YESTERDAY)
 
     day.clear()
-    foods = await diary.recent_foods()
-    names = [food.name for food in foods]
+    again = await diary.entries(YESTERDAY)
+    names = [entry.name for entry in again]
 
     assert names == ["Skyr"]
-
-
-async def test_an_older_day_stays_available_for_reports_without_entering_recent_foods(
-    diary: UserDiary, fatsecret: FakeFatSecret, household: Household
-) -> None:
-    user = household.user("jakub").fatsecret
-    older_day = TODAY - timedelta(days=14)
-
-    fatsecret.add_food_entry(user, food_entry("Skyr Stary", Meal.SNACKS, older_day, kcal=100))
-    first = await diary.entries(older_day)
-    foods = await diary.recent_foods()
-    second = await diary.entries(older_day)
-    names = [entry.name for entry in second]
-
-    assert first == second
-    assert names == ["Skyr Stary"]
-    assert foods == []
-    assert fatsecret.requests == 1 + 14
+    assert fatsecret.requests == 1
 
 
 async def test_an_observed_revoked_token_discards_cached_past_days(

@@ -16,9 +16,8 @@ import anyio
 
 from fatsecret_mcp.domain.day_summary import total_nutrition
 from fatsecret_mcp.domain.diary_day import Clock, today
-from fatsecret_mcp.domain.models import FoodEntry, Nutrition, RecentFood
-from fatsecret_mcp.domain.recent_foods import recent_diary_days, recent_foods
-from fatsecret_mcp.fatsecret.errors import FatSecretError, InvalidAccessToken
+from fatsecret_mcp.domain.models import FoodEntry, Nutrition
+from fatsecret_mcp.fatsecret.errors import InvalidAccessToken
 from fatsecret_mcp.fatsecret.gateway import AccessToken, FatSecretGateway
 
 PAST_DAY_CACHE_TTL = timedelta(hours=12)
@@ -32,13 +31,11 @@ class UserDiary:
         user: AccessToken,
         timezone: ZoneInfo,
         clock: Clock,
-        recent_food_days: int,
     ) -> None:
         self._fatsecret = fatsecret
         self._user = user
         self._timezone = timezone
         self._clock = clock
-        self._recent_food_days = recent_food_days
         self._past_days: dict[date, tuple[datetime, tuple[FoodEntry, ...]]] = {}
         self._lock = anyio.Lock()
         self._cache_changed = anyio.Event()
@@ -65,20 +62,6 @@ class UserDiary:
                 return cached
 
             return await self._read_day(day)
-
-    async def recent_foods(self, *, refresh: bool = False) -> list[RecentFood]:
-        """Recent Foods from this User's history, sharing the scan across all callers."""
-        async with self._lock:
-            days = self._history_days()
-
-            self._drop_expired_days()
-
-            if refresh:
-                self._discard_days(days)
-
-            entries = await self._recent_entries(days)
-
-        return recent_foods(entries)
 
     async def period_totals(self, days: list[date], *, refresh: bool = False) -> dict[date, Nutrition]:
         """Use cached entries where available and month totals for the remaining Diary Days."""
@@ -107,11 +90,6 @@ class UserDiary:
         """Discard a day's history after a successful write, including any earlier in-flight read."""
         async with self._lock:
             self._past_days.pop(day, None)
-
-    def _history_days(self) -> list[date]:
-        current_day = today(self._clock(), self._timezone)
-
-        return recent_diary_days(current_day, self._recent_food_days)
 
     def _drop_expired_days(self) -> None:
         now = self._clock()
@@ -176,40 +154,6 @@ class UserDiary:
         if day < today(fetched_at, self._timezone):
             self._past_days[day] = (fetched_at, tuple(entries))
             self._cache_changed.set()
-
-        return entries
-
-    async def _recent_entries(self, days: list[date]) -> list[FoodEntry]:
-        entries_by_day: dict[date, list[FoodEntry]] = {}
-
-        for day in days:
-            cached_entries = self._cached_entries(day)
-
-            if cached_entries is not None:
-                entries_by_day[day] = cached_entries
-
-        missing_days = [day for day in days if day not in entries_by_day]
-        # Collect gateway errors so the task group doesn't turn them into an ExceptionGroup.
-        failures: list[FatSecretError] = []
-
-        async def read_day(day: date) -> None:
-            try:
-                entries_by_day[day] = await self._read_day(day)
-            except FatSecretError as error:
-                failures.append(error)
-                group.cancel_scope.cancel()
-
-        async with anyio.create_task_group() as group:
-            for day in missing_days:
-                group.start_soon(read_day, day)
-
-        if failures:
-            raise failures[0]
-
-        entries: list[FoodEntry] = []
-
-        for day in days:
-            entries += entries_by_day[day]
 
         return entries
 
