@@ -17,6 +17,8 @@ from fatsecret_mcp.domain.draft_token import seal_draft
 from fatsecret_mcp.domain.drafts import InvalidDraftItem, draft_item
 from fatsecret_mcp.domain.meal_suggestion import ask_about_previous_day, suggest_meal
 from fatsecret_mcp.domain.models import Draft, DraftItem, Meal, Nutrition, Serving
+from fatsecret_mcp.domain.stand_ins import check_label, stand_in_item
+from fatsecret_mcp.fatsecret.catalog import loggable_foods
 from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.errors import FatSecretError, NotFound
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
@@ -24,9 +26,11 @@ from fatsecret_mcp.tools.schemas import (
     Amounts,
     DayAfter,
     DiaryDayOrToday,
+    DraftItemInput,
     DraftItems,
     FoodDraft,
     FoodDraftInput,
+    NutritionLabelDraftInput,
     ProposedEntry,
     as_tool_result,
 )
@@ -51,11 +55,21 @@ def register(
     ) -> Annotated[CallToolResult, FoodDraft]:
         """Propose Food Entries without writing to the Food Diary. Show the Draft to the User.
 
-        Use Food and Serving ids from search_foods. number_of_units is the FatSecret unit count,
-        not necessarily grams: scale it from the Serving's number_of_units. Include assumptions
-        about estimated amounts. Always ask the User whether the suggested Meal is correct.
-        If previous_day_suggested is true, ask whether to use Snacks on the previous Diary Day
-        instead. A correction needs a new Draft with the explicit Meal or Diary Day.
+        A Food item uses Food and Serving ids from search_foods. number_of_units is the FatSecret unit
+        count, not necessarily grams: scale it from the Serving's number_of_units.
+
+        A Nutrition Label item logs a branded product missing from the catalog as a Stand-in: the
+        closest catalog Food for search_phrase, in the amount whose kcal match the label, under the
+        product's name. Ask for a photo of the Nutrition Label unless the User already gave its values.
+        For a product logged before as a Stand-in,
+        reuse its label from this conversation or your memory, and ask again otherwise.
+        Estimate the label, with estimated=true, only when the User has no packaging. Show the
+        label values, the logged values and the difference. If the User dislikes the Stand-in,
+        draft again with a different search_phrase.
+
+        Include assumptions about estimated amounts. Always ask the User whether the suggested Meal
+        is correct. If previous_day_suggested is true, ask whether to use Snacks on the
+        previous Diary Day instead. A correction needs a new Draft with the explicit Meal or Diary Day.
         Nothing is written by this tool; a Draft expires after thirty minutes.
         """
         now = clock()
@@ -69,11 +83,7 @@ def register(
 
         try:
             for item in items:
-                name, serving = await _resolve_serving(item, fatsecret)
-
-                prepared.append(
-                    draft_item(item.food_id, name, serving, item.number_of_units, item.assumption)
-                )
+                prepared.append(await _prepared_item(item, fatsecret))
 
             entries = await diary.entries(day)
         except (FatSecretError, InvalidDraftItem) as error:
@@ -110,6 +120,32 @@ def register(
         )
 
         return as_tool_result(result)
+
+
+async def _prepared_item(item: DraftItemInput, fatsecret: FatSecretGateway) -> DraftItem:
+    if isinstance(item, NutritionLabelDraftInput):
+        return await _stand_in(item, fatsecret)
+
+    name, serving = await _resolve_serving(item, fatsecret)
+
+    return draft_item(item.food_id, name, serving, item.number_of_units, item.assumption)
+
+
+async def _stand_in(item: NutritionLabelDraftInput, fatsecret: FatSecretGateway) -> DraftItem:
+    label = item.nutrition_label.as_label()
+
+    # An implausible label is rejected before it costs any catalog requests.
+    check_label(label)
+
+    foods = await loggable_foods(fatsecret, item.search_phrase)
+
+    return stand_in_item(
+        product_name=item.product_name,
+        label=label,
+        grams=item.grams,
+        foods=foods,
+        assumption=item.assumption,
+    )
 
 
 async def _resolve_serving(item: FoodDraftInput, fatsecret: FatSecretGateway) -> tuple[str, Serving]:

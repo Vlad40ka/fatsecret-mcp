@@ -37,6 +37,12 @@ Days. Days with has_food_entries=false have no Food Entries. Compare periods wit
 - search_foods finds catalog Foods with loggable Servings. \
 Pass an English rendering for non-English descriptions. A not_found result means there are no \
 loggable matches.
+- When a branded product isn't among the matches, ask for a photo of its Nutrition Label, unless \
+the User already gave its values, and draft it as a Nutrition Label item: the server logs it as a \
+Stand-in, the closest catalog Food with kcal matching the label, under the product's name. The \
+server keeps no record of Stand-ins: for a product logged before, reuse its label from this \
+conversation or your memory, or ask again. Estimate the label only when the User has no packaging. \
+If the User dislikes the Stand-in, draft again with a different search phrase.
 - draft_entries proposes Food Entries, assumptions, a Meal and Diary Day, plus the day after adding \
 against Daily Targets. Show the Draft and ask about a suggested Meal. When previous_day_suggested \
 is true, ask about Snacks on the previous Diary Day. Corrections need a new Draft. This tool does \

@@ -41,6 +41,14 @@ class Nutrition:
             carbohydrate=self.carbohydrate - other.carbohydrate,
         )
 
+    def scaled(self, factor: float) -> Nutrition:
+        return Nutrition(
+            kcal=self.kcal * factor,
+            protein=self.protein * factor,
+            fat=self.fat * factor,
+            carbohydrate=self.carbohydrate * factor,
+        )
+
 
 @dataclass(frozen=True)
 class FoodEntry:
@@ -87,6 +95,14 @@ class Serving:
 @dataclass(frozen=True)
 class Food(CatalogFood):
     servings: list[Serving]
+
+
+@dataclass(frozen=True)
+class NutritionLabel:
+    """A product's kcal and Macros per 100 g, read from its packaging or estimated by Claude."""
+
+    per_100_g: Nutrition
+    estimated: bool
 
 
 @dataclass(frozen=True)
@@ -138,6 +154,19 @@ class DraftItem:
     amount: str
     nutrition: Nutrition
     assumption: str | None
+    stand_in: StandIn | None = None
+    """Set when the entry logs a catalog Food in place of a product missing from the catalog."""
+
+
+@dataclass(frozen=True)
+class StandIn:
+    """The catalog Food a Stand-in logs, beside its product's Nutrition Label for the grams eaten."""
+
+    food_name: str
+    grams_eaten: float
+    label_for_grams_eaten: Nutrition
+    """The product's Nutrition Label scaled from 100 g to the grams eaten."""
+    estimated: bool
 
 
 @dataclass(frozen=True)

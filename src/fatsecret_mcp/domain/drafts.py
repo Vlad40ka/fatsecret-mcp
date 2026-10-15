@@ -21,12 +21,7 @@ def draft_item(
         raise InvalidDraftItem("Serving has no valid positive unit count. Choose another Serving.")
 
     ratio = number_of_units / serving.number_of_units
-    nutrition = Nutrition(
-        kcal=serving.nutrition.kcal * ratio,
-        protein=serving.nutrition.protein * ratio,
-        fat=serving.nutrition.fat * ratio,
-        carbohydrate=serving.nutrition.carbohydrate * ratio,
-    )
+    nutrition = serving.nutrition.scaled(ratio)
 
     _check_amount(serving, ratio, nutrition)
 

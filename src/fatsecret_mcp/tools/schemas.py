@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from mcp_types import CallToolResult, TextContent
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
 
 from fatsecret_mcp.domain.models import (
     Confirmation,
@@ -23,8 +23,10 @@ from fatsecret_mcp.domain.models import (
     FoodEntry,
     Meal,
     Nutrition,
+    NutritionLabel,
     PeriodDaySummary,
     Serving,
+    StandIn,
 )
 
 ATTRIBUTION = "Powered by fatsecret Platform API"
@@ -59,7 +61,72 @@ class FoodDraftInput(BaseModel):
     assumption: str | None = None
 
 
-DraftItems = Annotated[list[FoodDraftInput], Field(min_length=1)]
+class NutritionLabelValues(BaseModel):
+    """kcal and Macros per 100 g of the product."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kcal: float = Field(gt=0, le=900, allow_inf_nan=False)
+    protein: float = Field(ge=0, le=100, allow_inf_nan=False)
+    fat: float = Field(ge=0, le=100, allow_inf_nan=False)
+    carbohydrate: float = Field(ge=0, le=100, allow_inf_nan=False)
+    estimated: bool = Field(description="True when estimated without the packaging, not read from it.")
+
+    def as_label(self) -> NutritionLabel:
+        per_100_g = Nutrition(
+            kcal=self.kcal,
+            protein=self.protein,
+            fat=self.fat,
+            carbohydrate=self.carbohydrate,
+        )
+
+        return NutritionLabel(per_100_g=per_100_g, estimated=self.estimated)
+
+
+class NutritionLabelDraftInput(BaseModel):
+    """A product missing from the catalog, logged as a Stand-in under its own name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str = Field(min_length=1, description="The product's name, given to its Food Entry.")
+    nutrition_label: NutritionLabelValues
+    grams: float = Field(
+        gt=0,
+        le=10000,
+        allow_inf_nan=False,
+        description="Grams of the product eaten.",
+    )
+    search_phrase: str = Field(
+        min_length=1,
+        description='English catalog search for a similar generic Food, e.g. "protein bar".',
+    )
+    assumption: str | None = None
+
+
+# Fields only a Nutrition Label item has, so one missing its label is still told what it lacks.
+NUTRITION_LABEL_ITEM_FIELDS = {"product_name", "nutrition_label", "grams", "search_phrase"}
+
+
+def _draft_item_kind(item: Any) -> str:
+    """Tells the two kinds of item apart by the fields only a Nutrition Label item has."""
+    if isinstance(item, NutritionLabelDraftInput):
+        return "nutrition_label"
+
+    if isinstance(item, dict):
+        present = [field in item for field in NUTRITION_LABEL_ITEM_FIELDS]
+
+        if any(present):
+            return "nutrition_label"
+
+    return "food"
+
+
+DraftItemInput = Annotated[
+    Annotated[FoodDraftInput, Tag("food")] | Annotated[NutritionLabelDraftInput, Tag("nutrition_label")],
+    Discriminator(_draft_item_kind),
+]
+
+DraftItems = Annotated[list[DraftItemInput], Field(min_length=1)]
 
 DraftId = Annotated[str, Field(min_length=1, description="The draft_id returned by draft_entries.")]
 
@@ -197,8 +264,8 @@ class FoodMatch(BaseModel):
     )
 
     @classmethod
-    def of_catalog_food(cls, food: Food, servings: list[Serving]) -> FoodMatch:
-        food_servings = [FoodServing.of(serving) for serving in servings]
+    def of(cls, food: Food) -> FoodMatch:
+        food_servings = [FoodServing.of(serving) for serving in food.servings]
 
         return cls(
             food_id=food.id,
@@ -214,6 +281,24 @@ class FoodSearch(BaseModel):
     attribution: str = ATTRIBUTION
 
 
+class StandInDetails(BaseModel):
+    food_name: str = Field(description="The catalog Food logged in the product's place.")
+    grams_eaten: float
+    nutrition_label: Amounts = Field(description="The product's Nutrition Label for the grams eaten.")
+    difference: Amounts = Field(description="The logged values minus the Nutrition Label's.")
+    estimated: bool = Field(description="True when the Nutrition Label was estimated, not read from it.")
+
+    @classmethod
+    def of(cls, stand_in: StandIn, logged: Nutrition) -> StandInDetails:
+        return cls(
+            food_name=stand_in.food_name,
+            grams_eaten=stand_in.grams_eaten,
+            nutrition_label=Amounts.of(stand_in.label_for_grams_eaten),
+            difference=Amounts.of(logged - stand_in.label_for_grams_eaten),
+            estimated=stand_in.estimated,
+        )
+
+
 class ProposedEntry(BaseModel):
     food_id: str
     serving_id: str
@@ -226,10 +311,14 @@ class ProposedEntry(BaseModel):
     fat: float
     carbohydrate: float
     assumption: str | None
+    stand_in: StandInDetails | None = Field(
+        description="Set when the entry is a Stand-in for a product missing from the catalog."
+    )
 
     @classmethod
     def of(cls, item: DraftItem) -> ProposedEntry:
         amounts = Amounts.of(item.nutrition)
+        stand_in = _stand_in_details(item)
 
         return cls(
             food_id=item.entry.food_id,
@@ -243,6 +332,7 @@ class ProposedEntry(BaseModel):
             fat=amounts.fat,
             carbohydrate=amounts.carbohydrate,
             assumption=item.assumption,
+            stand_in=stand_in,
         )
 
 
@@ -318,6 +408,13 @@ def as_tool_result(result: BaseModel) -> CallToolResult:
         content=[TextContent(type="text", text=text)],
         structured_content=structured,
     )
+
+
+def _stand_in_details(item: DraftItem) -> StandInDetails | None:
+    if item.stand_in is None:
+        return None
+
+    return StandInDetails.of(item.stand_in, item.nutrition)
 
 
 def _confirmation_status(
