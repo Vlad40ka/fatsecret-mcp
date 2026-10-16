@@ -1,4 +1,4 @@
-"""An in-memory FatSecret: a shared catalog and one Food Diary per FatSecret account.
+"""An in-memory FatSecret: a shared catalog, one Food Diary per FatSecret account, and the PIN flow.
 
 Every call is counted and, like a network call, gives way to other calls while it's in flight.
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date
 from itertools import count
+from urllib.parse import parse_qs, quote, urlsplit
 
 import anyio.lowlevel
 
@@ -17,9 +18,10 @@ from fatsecret_mcp.fatsecret.errors import (
     FatSecretError,
     InvalidAccessToken,
     NotFound,
+    PinRejected,
     from_code,
 )
-from fatsecret_mcp.fatsecret.gateway import AccessToken
+from fatsecret_mcp.fatsecret.gateway import AccessToken, RequestToken
 
 
 class FakeFatSecret:
@@ -30,6 +32,7 @@ class FakeFatSecret:
         self._failure: FatSecretError | None = None
         self._catalog: dict[str, Food] = {}
         self._search_results: dict[str, list[CatalogFood]] = {}
+        self._approvals: dict[str, tuple[str, AccessToken]] = {}
         self._in_flight = 0
         self._request_limit: int | None = None
         self.requests = 0
@@ -87,6 +90,47 @@ class FakeFatSecret:
     def limit_requests_to(self, requests: int | None) -> None:
         """Answer with error 12 once this many requests have been made; None lifts the limit."""
         self._request_limit = requests
+
+    async def request_token(self) -> RequestToken:
+        await self._request()
+
+        if self._failure is not None:
+            raise self._failure
+
+        number = next(_ids)
+
+        return RequestToken(
+            token=f"request-token-{number}",
+            secret=f"request-secret-{number}",
+        )
+
+    def authorize_url(self, request_token: RequestToken) -> str:
+        token = quote(request_token.token, safe="")
+
+        return f"https://authentication.fatsecret.com/oauth/authorize?oauth_token={token}"
+
+    def approve_at(self, authorize_url: str, account: AccessToken) -> str:
+        """The User opens `authorize_url`, signs in to `account` and approves; returns the PIN shown."""
+        request_token = parse_qs(urlsplit(authorize_url).query)["oauth_token"][0]
+        pin = f"{next(_ids):07d}"
+
+        self.add_account(account)
+        self._approvals[request_token] = (pin, account)
+
+        return pin
+
+    async def exchange_pin(self, request_token: RequestToken, pin: str) -> AccessToken:
+        await self._request()
+
+        if self._failure is not None:
+            raise self._failure
+
+        approval = self._approvals.pop(request_token.token, None)
+
+        if approval is None or approval[0] != pin.strip():
+            raise PinRejected()
+
+        return approval[1]
 
     async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
         await self._request()

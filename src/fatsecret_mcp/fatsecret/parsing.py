@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 from typing import Any, cast
+from urllib.parse import parse_qs
 
 from fatsecret_mcp.domain.models import CatalogFood, Food, FoodEntry, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.errors import UpstreamFailure
@@ -45,6 +46,18 @@ def number_text(value: float) -> str:
 def created_food_entry_id(body: dict[str, Any]) -> str:
     """The id in a `food_entry.create` response: `{"food_entry_id": {"value": "…"}}`."""
     return _text(_object(body, "food_entry_id"), "value")
+
+
+def token_and_secret(text: str) -> tuple[str, str]:
+    """The token and secret in a PIN flow response, form-encoded: `oauth_token=…&oauth_token_secret=…`."""
+    fields = parse_qs(text, strict_parsing=False)
+    token = fields.get("oauth_token", [""])[0]
+    secret = fields.get("oauth_token_secret", [""])[0]
+
+    if not token or not secret:
+        raise UpstreamFailure("a sign-in response without a token")
+
+    return token, secret
 
 
 def error_code(error: object) -> int | None:

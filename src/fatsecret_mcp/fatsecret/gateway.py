@@ -28,6 +28,14 @@ class AccessToken:
     secret: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class RequestToken:
+    """A short-lived OAuth 1.0 token from the PIN flow, which the User approves on FatSecret's site."""
+
+    token: str = field(repr=False)
+    secret: str = field(repr=False)
+
+
 class FatSecretGateway(Protocol):
     async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
         """The first page of catalog matches, in FatSecret's order; no User credentials needed."""
@@ -54,4 +62,16 @@ class FatSecretGateway(Protocol):
 
         It works for any Food the User could log in the app, including Foods the catalog can't return.
         """
+        ...
+
+    async def request_token(self) -> RequestToken:
+        """Start the PIN flow: a request token for the User to approve; no User credentials needed."""
+        ...
+
+    def authorize_url(self, request_token: RequestToken) -> str:
+        """Where the User signs in with their own FatSecret account and approves; FatSecret shows a PIN."""
+        ...
+
+    async def exchange_pin(self, request_token: RequestToken, pin: str) -> AccessToken:
+        """Finish the PIN flow: the access token for the account that approved `request_token`."""
         ...

@@ -9,13 +9,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Protocol
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.client import FatSecretApi
-from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken, NotFound
-from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
+from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, InvalidAccessToken, NotFound, PinRejected
+from fatsecret_mcp.fatsecret.gateway import FatSecretGateway, RequestToken
 from tests.fatsecret.fake import FakeFatSecret, food_entry
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret
 
@@ -183,6 +184,9 @@ class World(Protocol):
     def given_catalog(self) -> None: ...
     def given_quota_exceeded(self) -> None: ...
     def given_a_recorded_food_entry_create(self) -> None: ...
+    def given_a_user_signing_in_with_a_pin(self) -> None: ...
+    def given_a_pin_the_user_never_saw(self) -> None: ...
+    def pin_shown_after_approving(self, request_token: RequestToken) -> str: ...
 
 
 class FakeWorld:
@@ -222,6 +226,15 @@ class FakeWorld:
             USER, food_entry("Outside the month", Meal.LUNCH, date(2015, 2, 1), kcal=500)
         )
 
+    def given_a_user_signing_in_with_a_pin(self) -> None:
+        pass
+
+    def given_a_pin_the_user_never_saw(self) -> None:
+        pass
+
+    def pin_shown_after_approving(self, request_token: RequestToken) -> str:
+        return self.fake.approve_at(self.fake.authorize_url(request_token), USER)
+
 
 class RecordedWorld:
     def __init__(self, recorded: RecordedFatSecret, gateway: FatSecretApi) -> None:
@@ -254,6 +267,18 @@ class RecordedWorld:
         suffix = "" if scenario == "full" else f"_{scenario}"
 
         self.recorded.serve(f"food_entries_get_month{suffix}.json")
+
+    def given_a_user_signing_in_with_a_pin(self) -> None:
+        self.recorded.serve("oauth_request_token.json")
+        self.recorded.serve("oauth_access_token.json")
+        self.recorded.serve("food_entries_get_empty.json")
+
+    def given_a_pin_the_user_never_saw(self) -> None:
+        self.recorded.serve("oauth_request_token.json")
+        self.recorded.serve("oauth_access_token_wrong_pin.json")
+
+    def pin_shown_after_approving(self, request_token: RequestToken) -> str:
+        return "4417092"
 
 
 @pytest.fixture(params=["fake", "fatsecret_api"])
@@ -380,3 +405,27 @@ async def test_creating_a_food_entry_rejects_a_revoked_access_token(world: World
 
     with pytest.raises(InvalidAccessToken):
         await world.gateway.create_food_entry(USER, SKYR_TWO_UNITS, Meal.LUNCH, THREE_MEALS_DAY)
+
+
+async def test_the_pin_flow_gives_an_access_token_to_the_users_own_food_diary(world: World) -> None:
+    world.given_a_user_signing_in_with_a_pin()
+
+    request_token = await world.gateway.request_token()
+    authorize_url = world.gateway.authorize_url(request_token)
+    pin = world.pin_shown_after_approving(request_token)
+    access_token = await world.gateway.exchange_pin(request_token, pin)
+
+    link = urlsplit(authorize_url)
+
+    assert link._replace(query="").geturl() == "https://authentication.fatsecret.com/oauth/authorize"
+    assert parse_qs(link.query) == {"oauth_token": [request_token.token]}
+    assert await world.gateway.list_food_entries(access_token, EMPTY_DAY) == []
+
+
+async def test_a_pin_the_user_never_saw_is_rejected(world: World) -> None:
+    world.given_a_pin_the_user_never_saw()
+
+    request_token = await world.gateway.request_token()
+
+    with pytest.raises(PinRejected):
+        await world.gateway.exchange_pin(request_token, "0000000")

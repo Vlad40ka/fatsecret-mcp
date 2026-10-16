@@ -76,6 +76,16 @@ class CredentialsRejected(FatSecretError):
         )
 
 
+class PinRejected(FatSecretError):
+    """FatSecret didn't exchange the PIN: it was mistyped, or the sign-in took too long."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "FatSecret didn't accept the PIN: it was mistyped, or the sign-in link has expired. "
+            "Start the sign-in again."
+        )
+
+
 class UpstreamFailure(FatSecretError):
     """FatSecret was unreachable, failed, or answered with something the server doesn't understand."""
 

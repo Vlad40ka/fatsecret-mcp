@@ -2,4 +2,5 @@
 
 - `models`: the shape of the configuration and its rules.
 - `loader`: reading it from environment variables at startup.
+- `writer`: adding a User to the `FATSECRET_MCP_USERS` value, for the Operator to paste.
 """

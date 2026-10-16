@@ -24,6 +24,7 @@ from pydantic_core import ErrorDetails
 
 from fatsecret_mcp.auth.passwords import valid_password_hash
 from fatsecret_mcp.config.models import Household, User
+from fatsecret_mcp.fatsecret.gateway import ConsumerKey
 
 CONSUMER_KEY_VAR = "FATSECRET_CONSUMER_KEY"
 CONSUMER_SECRET_VAR = "FATSECRET_CONSUMER_SECRET"
@@ -40,16 +41,36 @@ class HouseholdConfigError(Exception):
 
 
 def load_household(environ: Mapping[str, str]) -> Household:
-    consumer_key = _required(environ, CONSUMER_KEY_VAR)
-    consumer_secret = _required(environ, CONSUMER_SECRET_VAR)
+    consumer = load_consumer_key(environ)
     signing_key = _required(environ, SIGNING_KEY_VAR)
     public_base_url = _public_base_url(environ)
 
     if len(signing_key) < 32:
         raise HouseholdConfigError(f"{SIGNING_KEY_VAR} must contain at least 32 characters")
 
+    users = parse_users(_required(environ, USERS_VAR))
+
+    return Household(
+        consumer_key=SecretStr(consumer.key),
+        consumer_secret=SecretStr(consumer.secret),
+        signing_key=SecretStr(signing_key),
+        users=tuple(users),
+        public_base_url=public_base_url,
+    )
+
+
+def load_consumer_key(environ: Mapping[str, str]) -> ConsumerKey:
+    """The server's FatSecret consumer key and secret, all that the PIN flow needs."""
+    return ConsumerKey(
+        key=_required(environ, CONSUMER_KEY_VAR),
+        secret=_required(environ, CONSUMER_SECRET_VAR),
+    )
+
+
+def parse_users(value: str) -> list[User]:
+    """The Users in a `FATSECRET_MCP_USERS` value, checked as the server checks them at startup."""
     try:
-        users = _USERS.validate_json(_required(environ, USERS_VAR))
+        users = _USERS.validate_json(value)
     except ValidationError as error:
         problems = "; ".join(_describe(details) for details in error.errors(include_input=False))
 
@@ -66,13 +87,7 @@ def load_household(environ: Mapping[str, str]) -> Household:
     if repeated:
         raise HouseholdConfigError(f"{USERS_VAR} repeats a User id: {', '.join(repeated)}")
 
-    return Household(
-        consumer_key=SecretStr(consumer_key),
-        consumer_secret=SecretStr(consumer_secret),
-        signing_key=SecretStr(signing_key),
-        users=tuple(users),
-        public_base_url=public_base_url,
-    )
+    return users
 
 
 def validate_http_household(household: Household) -> None:

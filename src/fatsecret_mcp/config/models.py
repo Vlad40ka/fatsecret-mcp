@@ -35,6 +35,9 @@ def _timezone(value: object) -> object:
 
 
 NonEmptySecret = Annotated[SecretStr, Field(min_length=1)]
+UserId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
+DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Timezone = Annotated[ZoneInfo, BeforeValidator(_timezone)]
 MealStart = Annotated[str, StringConstraints(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")]
 
 
@@ -83,12 +86,12 @@ class MealHours(ConfigModel):
 
 
 class User(ConfigModel):
-    id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
-    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    id: UserId
+    display_name: DisplayName
     fatsecret_access_token: NonEmptySecret
     fatsecret_access_secret: NonEmptySecret
     daily_targets: DailyTargets
-    timezone: Annotated[ZoneInfo, BeforeValidator(_timezone)] = DEFAULT_TIMEZONE
+    timezone: Timezone = DEFAULT_TIMEZONE
     meal_hours: MealHours = Field(default_factory=MealHours)
     connector_password_hash: SecretStr | None = None
     session_generation: Annotated[int, Field(strict=True, ge=0)] = 0

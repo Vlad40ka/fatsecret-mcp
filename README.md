@@ -12,7 +12,7 @@ Early development. The server runs locally over stdio or over HTTP with connecto
 
 ## Run it locally
 
-You need Python 3.13, [uv](https://docs.astral.sh/uv/), your own OAuth 1.0 consumer key and secret from the [FatSecret Platform API](https://platform.fatsecret.com), and an OAuth 1.0 access token for your FatSecret account.
+You need Python 3.13, [uv](https://docs.astral.sh/uv/) and your own OAuth 1.0 consumer key and secret from the [FatSecret Platform API](https://platform.fatsecret.com).
 
 Put the configuration in a `.env` file in the repository (it's git-ignored):
 
@@ -23,7 +23,30 @@ FATSECRET_MCP_SIGNING_KEY=...
 FATSECRET_MCP_USERS='[{"id": "me", "display_name": "Me", "fatsecret_access_token": "...", "fatsecret_access_secret": "...", "daily_targets": {"kcal": 2200, "protein": 140, "fat": 70, "carbohydrate": 250}, "timezone": "Europe/Warsaw"}]'
 ```
 
-`FATSECRET_MCP_USERS` lists everyone the server serves. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as.
+`FATSECRET_MCP_USERS` lists everyone the server serves. You don't write it by hand: `add-user` (below) produces it. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as over stdio.
+
+### Add a user
+
+```sh
+uv run --env-file .env fatsecret-mcp add-user
+```
+
+The command takes about two minutes per person:
+
+1. It shows a FatSecret link. The new user opens it, signs in with their own FatSecret account (the one in the FatSecret app, not your developer account), allows access, and reads out the PIN that FatSecret shows.
+2. You type their display name, a user `id` for signing in, their daily targets, their timezone (Europe/Warsaw by default) and, optionally, meal hours.
+3. It generates a connector password and shows it once. Give it to the user straight away; the configuration keeps only its scrypt hash.
+4. It prints the complete new `FATSECRET_MCP_USERS` value. Paste the whole value into `.env` or the server's secrets.
+
+When `FATSECRET_MCP_USERS` is already set, the new user is added to it and everyone else is kept exactly as written. An `id` that's already taken is refused. To sign an existing user in to FatSecret again, remove them from the value first.
+
+### Check the configuration
+
+```sh
+uv run --env-file .env fatsecret-mcp check
+```
+
+`check` validates the configuration as `serve` does at startup: the HTTP settings when `FATSECRET_MCP_BASE_URL` is set, otherwise the acting user for stdio. Then it reads each user's current diary day, one FatSecret request per user, and reports per user whether the connection works. A revoked access token, an exhausted daily quota and an IP restriction each get their own message. It prints no tokens, secrets or passwords, and exits with status 1 if anything failed.
 
 Generate a random signing key once with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` and put it in `FATSECRET_MCP_SIGNING_KEY` (at least 32 characters). Keep it across restarts; changing it invalidates drafts signed with the old key. Draft ids are signed, self-contained values holding entry names, ids, units, meal, diary day, user id and expiry; they contain no nutrition values.
 
@@ -37,7 +60,7 @@ Food search uses only the FatSecret catalog that a free API key can reach: US fo
 
 Past-day entries are shared across diary questions in memory until the server stops or twelve hours pass from fetching them. Today is always read fresh. If you edit a past day in the FatSecret app, ask Claude to refresh it: `get_diary_day` and `get_period_summary` accept `refresh=true`. Period summaries reuse cached entries and fetch month totals for dates not yet loaded.
 
-Then add the server to Claude Code:
+Then add the server to Claude Code. Without a command, `fatsecret-mcp` serves over stdio, the same as `fatsecret-mcp serve`:
 
 ```sh
 claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file .env fatsecret-mcp
@@ -47,16 +70,10 @@ claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file
 
 For HTTP, set `FATSECRET_MCP_BASE_URL` to the server's public HTTPS origin, for example `https://diary.example.com`. For local development, use `http://127.0.0.1:8000`. The value has no path, query or credentials; the connector URL is that origin plus `/mcp`.
 
-Each user needs a separate connector password. Hash it with scrypt using an interactive prompt:
+Each user needs a connector password. `add-user` generates one and stores its scrypt hash in that user's `connector_password_hash` field. Their optional `session_generation` is an integer starting at `0`. Keep the existing instance signing key: it also signs connector credentials, using a separate signing context from drafts. Configuration errors stop the server before it starts listening.
 
 ```sh
-uv run python -c 'from getpass import getpass; from fatsecret_mcp.auth.passwords import hash_password; print(hash_password(getpass("Connector password: ")))'
-```
-
-Put the resulting string in that user's `connector_password_hash` field inside `FATSECRET_MCP_USERS`. Their optional `session_generation` is an integer starting at `0`. Keep the existing instance signing key: it also signs connector credentials, using a separate signing context from drafts. Configuration errors stop the server before it starts listening.
-
-```sh
-uv run --env-file .env fatsecret-mcp --transport http --host 127.0.0.1 --port 8000
+uv run --env-file .env fatsecret-mcp serve --transport http --host 127.0.0.1 --port 8000
 ```
 
 `GET /health` returns only `{"status":"ok"}`. An unauthenticated request to `/mcp` returns `401` and the address of the OAuth metadata. Once the server is reachable over HTTPS, add its `/mcp` URL as a custom connector in Claude. Sign in with your user `id` and connector password. Claude's published client metadata supplies its allowed callbacks; the server fetches metadata only from `https://claude.ai` and does not offer dynamic client registration.

@@ -10,7 +10,7 @@ import time
 from collections.abc import Mapping
 from urllib.parse import quote
 
-from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
+from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey, RequestToken
 
 
 def signed_url(
@@ -18,9 +18,12 @@ def signed_url(
     url: str,
     params: Mapping[str, str],
     consumer: ConsumerKey,
-    user: AccessToken | None,
+    user: AccessToken | RequestToken | None,
 ) -> str:
-    """`url` with `params` and the OAuth 1.0 parameters, signed, in its query string."""
+    """`url` with `params` and the OAuth 1.0 parameters, signed, in its query string.
+
+    `params` may carry extra OAuth parameters, such as the PIN flow's `oauth_callback`.
+    """
     oauth = {
         "oauth_consumer_key": consumer.key,
         "oauth_signature_method": "HMAC-SHA1",

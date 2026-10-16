@@ -131,10 +131,12 @@ async def login_form(http: httpx2.AsyncClient, **overrides: str) -> dict[str, st
     return {"request": unescape(hidden.group(1))}
 
 
-async def authorize(http: httpx2.AsyncClient, username: str = "jakub", **overrides: str) -> str:
+async def authorize(
+    http: httpx2.AsyncClient, username: str = "jakub", password: str = PASSWORD, **overrides: str
+) -> str:
     data = await login_form(http, **overrides)
 
-    data.update(username=username, password=PASSWORD)
+    data.update(username=username, password=password)
     response = await http.post("/authorize", data=data)
 
     assert response.status_code == 302, response.text
@@ -175,8 +177,10 @@ async def refresh(http: httpx2.AsyncClient, refresh_token: str, **overrides: str
     return await http.post("/token", data=data)
 
 
-async def sign_in(http: httpx2.AsyncClient, username: str = "jakub") -> dict[str, Any]:
-    code = await authorize(http, username)
+async def sign_in(
+    http: httpx2.AsyncClient, username: str = "jakub", password: str = PASSWORD
+) -> dict[str, Any]:
+    code = await authorize(http, username, password)
     response = await exchange(http, code)
 
     assert response.status_code == 200, response.text

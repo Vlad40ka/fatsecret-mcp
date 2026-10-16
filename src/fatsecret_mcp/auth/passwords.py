@@ -11,6 +11,24 @@ _PREFIX = "scrypt$32768$8$1$"
 _FORMAT = re.compile(r"scrypt\$32768\$8\$1\$[0-9a-f]{32}\$[0-9a-f]{128}")
 DUMMY_PASSWORD_HASH = _PREFIX + "00" * 16 + "$" + "00" * 64
 
+# Lowercase letters and digits without look-alikes (0/o, 1/l/i), so a password is easy to type on a phone.
+_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+_PASSWORD_GROUPS = 5
+_PASSWORD_GROUP_LENGTH = 4
+
+
+def generate_password() -> str:
+    """A random connector password: five groups of four characters, about 99 bits."""
+    groups = [_random_group() for _ in range(_PASSWORD_GROUPS)]
+
+    return "-".join(groups)
+
+
+def _random_group() -> str:
+    characters = [secrets.choice(_PASSWORD_ALPHABET) for _ in range(_PASSWORD_GROUP_LENGTH)]
+
+    return "".join(characters)
+
 
 def valid_password_hash(value: str) -> bool:
     return _FORMAT.fullmatch(value) is not None

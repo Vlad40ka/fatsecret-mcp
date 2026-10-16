@@ -2,6 +2,7 @@
 
 Each request must match a recorded one (same endpoint, same non-OAuth parameters) and carry a valid
 OAuth 1.0 signature for the test credentials below, so the tests also check the adapter's wire format.
+The PIN flow's requests are signed with the placeholder tokens that the recorded responses hand out.
 """
 
 from __future__ import annotations
@@ -19,6 +20,16 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "fatsecret"
 
 CONSUMER = ConsumerKey(key="test-consumer-key", secret="test-consumer-secret")
 USER = AccessToken(token="test-access-token", secret="test-access-secret")
+
+REQUEST_TOKEN_URL = "https://authentication.fatsecret.com/oauth/request_token"
+ACCESS_TOKEN_URL = "https://authentication.fatsecret.com/oauth/access_token"
+
+# The tokens a request may be signed with, and their secrets.
+_TOKEN_SECRETS = {
+    USER.token: USER.secret,
+    "REQUEST_TOKEN": "REQUEST_TOKEN_SECRET",
+    "ACCESS_TOKEN": "ACCESS_TOKEN_SECRET",
+}
 
 
 def fixture(name: str) -> dict[str, Any]:
@@ -45,6 +56,7 @@ class RecordedFatSecret:
         params = dict(request.url.params)
 
         _check_signature(request, params)
+        _check_pin_flow(request, params)
         if self._any_request is not None:
             return _response(self._any_request)
         plain = {key: value for key, value in params.items() if not key.startswith("oauth_")}
@@ -66,12 +78,23 @@ def _check_signature(request: httpx2.Request, params: dict[str, str]) -> None:
     token_secret = ""
 
     if "oauth_token" in params:
-        assert params["oauth_token"] == USER.token
-        token_secret = USER.secret
+        assert params["oauth_token"] in _TOKEN_SECRETS
+        token_secret = _TOKEN_SECRETS[params["oauth_token"]]
     signed = {key: value for key, value in params.items() if key != "oauth_signature"}
     expected = signature(request.method, _without_query(request), signed, CONSUMER.secret, token_secret)
 
     assert params.get("oauth_signature") == expected, "the request's OAuth 1.0 signature doesn't verify"
+
+
+def _check_pin_flow(request: httpx2.Request, params: dict[str, str]) -> None:
+    url = _without_query(request)
+
+    if url == REQUEST_TOKEN_URL:
+        assert params.get("oauth_callback") == "oob", "the PIN flow asks FatSecret to show a PIN"
+        assert "oauth_token" not in params
+    if url == ACCESS_TOKEN_URL:
+        assert params.get("oauth_token") == "REQUEST_TOKEN"
+        assert params.get("oauth_verifier"), "the PIN is sent as the OAuth verifier"
 
 
 def _without_query(request: httpx2.Request) -> str:

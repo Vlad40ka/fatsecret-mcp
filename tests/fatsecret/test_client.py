@@ -16,9 +16,11 @@ from fatsecret_mcp.fatsecret.errors import (
     InvalidAccessToken,
     IpAddressRejected,
     NotFound,
+    PinRejected,
     TooManyActions,
     UpstreamFailure,
 )
+from fatsecret_mcp.fatsecret.gateway import RequestToken
 from tests.fatsecret.recorded import CONSUMER, USER, RecordedFatSecret, fixture
 
 pytestmark = pytest.mark.anyio
@@ -112,6 +114,46 @@ async def test_an_unreachable_fatsecret_is_an_upstream_failure(transport_error: 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(fail)) as http:
         with pytest.raises(UpstreamFailure):
             await FatSecretApi(CONSUMER, http).list_food_entries(USER, DAY)
+
+
+REQUEST_TOKEN = RequestToken(
+    token="REQUEST_TOKEN",
+    secret="REQUEST_TOKEN_SECRET",
+)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx2.Response(503, text="Service Unavailable"),
+        httpx2.Response(401, text="Invalid consumer key"),
+        httpx2.Response(200, text="oauth_callback_confirmed=true"),
+        httpx2.Response(200, text="oauth_token=REQUEST_TOKEN"),
+    ],
+    ids=["http-503", "http-401", "no-token", "no-secret"],
+)
+async def test_an_unexpected_sign_in_answer_is_an_upstream_failure(answer: httpx2.Response) -> None:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(lambda _: answer)) as http:
+        api = FatSecretApi(CONSUMER, http)
+
+        with pytest.raises(UpstreamFailure):
+            await api.request_token()
+
+        with pytest.raises(UpstreamFailure):
+            await api.exchange_pin(REQUEST_TOKEN, "4417092")
+
+
+async def test_a_rejected_pin_does_not_quote_the_request_token() -> None:
+    recorded = RecordedFatSecret()
+
+    recorded.serve("oauth_access_token_wrong_pin.json")
+
+    async with recorded.client() as http:
+        with pytest.raises(PinRejected) as raised:
+            await FatSecretApi(CONSUMER, http).exchange_pin(REQUEST_TOKEN, "0000000")
+
+    assert "REQUEST_TOKEN" not in str(raised.value)
+    assert "Start the sign-in again" in str(raised.value)
 
 
 async def test_a_single_food_entry_sent_as_a_bare_object_is_still_listed() -> None:

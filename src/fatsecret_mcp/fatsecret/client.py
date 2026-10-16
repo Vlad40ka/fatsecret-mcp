@@ -2,6 +2,8 @@
 
 Calls are method-based (`rest/server.api?method=…`) with the OAuth 1.0 parameters in the query string,
 the wire format verified against a Basic-tier key. Errors come back as HTTP 200 with an error code.
+
+The PIN flow (3-legged OAuth 1.0 with `oob`) has its own endpoints, which answer with form-encoded text.
 """
 
 from __future__ import annotations
@@ -10,17 +12,21 @@ import logging
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx2
 
 from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition
 from fatsecret_mcp.fatsecret import errors, parsing
-from fatsecret_mcp.fatsecret.errors import FatSecretError, UpstreamFailure
-from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey
+from fatsecret_mcp.fatsecret.errors import FatSecretError, PinRejected, UpstreamFailure
+from fatsecret_mcp.fatsecret.gateway import AccessToken, ConsumerKey, RequestToken
 from fatsecret_mcp.fatsecret.oauth import signed_url
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 
 API_URL = "https://platform.fatsecret.com/rest/server.api"
+REQUEST_TOKEN_URL = "https://authentication.fatsecret.com/oauth/request_token"
+AUTHORIZE_URL = "https://authentication.fatsecret.com/oauth/authorize"
+ACCESS_TOKEN_URL = "https://authentication.fatsecret.com/oauth/access_token"
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,47 @@ class FatSecretApi:
         body = await self._call("food_entry.create", params, user, http_method="POST")
 
         return parsing.created_food_entry_id(body)
+
+    async def request_token(self) -> RequestToken:
+        token, secret = await self._sign_in_call(REQUEST_TOKEN_URL, {"oauth_callback": "oob"}, None)
+
+        return RequestToken(
+            token=token,
+            secret=secret,
+        )
+
+    def authorize_url(self, request_token: RequestToken) -> str:
+        return f"{AUTHORIZE_URL}?oauth_token={quote(request_token.token, safe='')}"
+
+    async def exchange_pin(self, request_token: RequestToken, pin: str) -> AccessToken:
+        params = {"oauth_verifier": pin.strip()}
+        token, secret = await self._sign_in_call(ACCESS_TOKEN_URL, params, request_token)
+
+        return AccessToken(
+            token=token,
+            secret=secret,
+        )
+
+    async def _sign_in_call(
+        self, url: str, params: Mapping[str, str], request_token: RequestToken | None
+    ) -> tuple[str, str]:
+        """One PIN flow step; GET works, though FatSecret's docs say POST."""
+        try:
+            async with self._request_limits.request():
+                signed = signed_url("GET", url, params, self._consumer, request_token)
+                response = await self._send("GET", signed)
+
+            # A PIN that wasn't approved, was mistyped or came too late is answered with HTTP 400.
+            if response.status_code == 400 and url == ACCESS_TOKEN_URL:
+                raise PinRejected()
+
+            if response.status_code != 200:
+                raise UpstreamFailure(f"HTTP {response.status_code}")
+
+            return parsing.token_and_secret(response.text)
+        except FatSecretError as error:
+            logger.warning("FatSecret sign-in failed: %s", type(error).__name__)
+            raise
 
     async def _call(
         self, method: str, params: Mapping[str, str], user: AccessToken | None, *, http_method: str = "GET"
