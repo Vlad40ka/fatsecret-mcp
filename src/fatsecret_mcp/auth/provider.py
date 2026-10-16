@@ -26,7 +26,7 @@ from fatsecret_mcp.auth.models import (
     RefreshClaims,
     SessionClaims,
 )
-from fatsecret_mcp.auth.passwords import DUMMY_PASSWORD_HASH, verify_password
+from fatsecret_mcp.auth.passwords import DUMMY_PASSWORD_HASH, PasswordChecks
 from fatsecret_mcp.auth.throttling import SignInThrottle
 from fatsecret_mcp.auth.tokens import InvalidCredential, open_token, pkce_challenge, seal_token
 from fatsecret_mcp.config.models import Household, User
@@ -41,7 +41,7 @@ _ACCESS_LIFETIME = 3600
 # at least once a month stays signed in. Earlier refresh tokens stay valid until they expire.
 _REFRESH_LIFETIME = 30 * 24 * 3600
 _INVALID_SIGN_IN = "Invalid user name or password."
-_THROTTLED_SIGN_IN = "Too many sign-in attempts. Try again in a few minutes."
+_THROTTLED_SIGN_IN = "Too many sign-in attempts. Try again shortly."
 
 
 class ConnectorAuth:
@@ -56,6 +56,7 @@ class ConnectorAuth:
         self.signing_key = household.signing_key.get_secret_value()
         self.used_codes: dict[str, float] = {}
         self.throttle = SignInThrottle()
+        self.password_checks = PasswordChecks()
 
     async def authorize(self, request: Request) -> Response:
         if request.method == "POST":
@@ -146,26 +147,34 @@ class ConnectorAuth:
         if not hmac.compare_digest(cookie.encode(), login.csrf.encode()):
             return _error("invalid_request")
 
+        retry_after = self.throttle.admit_server(self.clock().timestamp())
+
+        if retry_after is not None:
+            return _throttled_page(sealed, login, retry_after)
+
+        if not self.throttle.admit_form(login.csrf, login.expires_at, self.clock().timestamp()):
+            return _login_page(
+                None,
+                login.authorization.redirect_uri,
+                alert="Too many submissions of this form. Start sign-in again from your connector.",
+                status_code=429,
+            )
+
         username = str(form.get("username", "")).strip().casefold()
         password = str(form.get("password", ""))
         retry_after = self.throttle.admit(username, self.clock().timestamp())
 
         if retry_after is not None:
-            response = _login_page(
-                sealed,
-                login.authorization.redirect_uri,
-                alert=_THROTTLED_SIGN_IN,
-                status_code=429,
-            )
-
-            response.headers["Retry-After"] = str(retry_after)
-
-            return response
+            return _throttled_page(sealed, login, retry_after)
 
         user = self._user(username)
         stored = user.connector_password_hash if user else None
         password_hash = stored.get_secret_value() if stored else DUMMY_PASSWORD_HASH
-        verified = await anyio.to_thread.run_sync(verify_password, password, password_hash)
+
+        verified = await anyio.to_thread.run_sync(self.password_checks.verify, password, password_hash)
+
+        if verified is None:
+            return _throttled_page(sealed, login, 1)
 
         if user is None or not verified:
             return _login_page(
@@ -404,6 +413,19 @@ class ConnectorAuth:
         return client
 
 
+def _throttled_page(sealed: str, login: LoginRequest, retry_after: int) -> HTMLResponse:
+    response = _login_page(
+        sealed,
+        login.authorization.redirect_uri,
+        alert=_THROTTLED_SIGN_IN,
+        status_code=429,
+    )
+
+    response.headers["Retry-After"] = str(retry_after)
+
+    return response
+
+
 def _error(code: str) -> JSONResponse:
     return JSONResponse(
         content={"error": code},
@@ -413,23 +435,28 @@ def _error(code: str) -> JSONResponse:
 
 
 def _login_page(
-    sealed: str, redirect_uri: str, *, alert: str | None = None, status_code: int = 200
+    sealed: str | None, redirect_uri: str, *, alert: str | None = None, status_code: int = 200
 ) -> HTMLResponse:
     message = f'<p role="alert">{alert}</p>' if alert else ""
     callback = urlsplit(redirect_uri)
     callback_source = f"{callback.scheme}://{callback.netloc}{callback.path}"
+    form = ""
+
+    if sealed is not None:
+        form = f"""<form method="post" action="/authorize">
+<input type="hidden" name="request" value="{escape(sealed, quote=True)}">
+<p><label>User name <input name="username" autocomplete="username" required></label></p>
+<p><label>Connector password <input type="password" name="password" autocomplete="current-password" required>
+</label></p><button type="submit">Connect to Claude</button>
+</form>"""
+
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Connect your FatSecret diary</title></head>
 <body><main><h1>Connect your FatSecret diary</h1>
 <p>Sign in to let Claude read your diary and save the drafts you confirm.</p>
 {message}
-<form method="post" action="/authorize">
-<input type="hidden" name="request" value="{escape(sealed, quote=True)}">
-<p><label>User name <input name="username" autocomplete="username" required></label></p>
-<p><label>Connector password <input type="password" name="password" autocomplete="current-password" required>
-</label></p><button type="submit">Connect to Claude</button>
-</form></main></body></html>"""
+{form}</main></body></html>"""
     headers = {
         "Cache-Control": "no-store",
         "Referrer-Policy": "same-origin",

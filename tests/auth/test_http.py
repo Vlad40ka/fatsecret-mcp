@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
+import threading
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -11,6 +14,7 @@ from html import unescape
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import anyio
 import httpx2
 import pytest
 from pydantic import SecretStr
@@ -64,6 +68,29 @@ def client_metadata() -> dict[str, object]:
         "grant_types": ["authorization_code"],
         "response_types": ["code"],
     }
+
+
+@pytest.fixture
+def password_checks(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    scrypt = hashlib.scrypt
+    checks: list[bytes] = []
+
+    def derive(password: bytes, *, salt: bytes, n: int, r: int, p: int, maxmem: int, dklen: int) -> bytes:
+        checks.append(password)
+
+        return scrypt(
+            password,
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            maxmem=maxmem,
+            dklen=dklen,
+        )
+
+    monkeypatch.setattr(hashlib, "scrypt", derive)
+
+    return checks
 
 
 @pytest.fixture
@@ -855,4 +882,189 @@ async def test_simultaneous_failed_sign_ins_cannot_outrun_the_throttle(http: htt
     responses = await asyncio.gather(*attempts)
     statuses = sorted([response.status_code for response in responses])
 
-    assert statuses == [401] * 5 + [429] * 3
+    accepted = statuses.count(401)
+
+    assert 1 <= accepted <= 5
+    assert statuses == [401] * accepted + [429] * (8 - accepted)
+
+
+async def test_one_form_cannot_run_forty_password_checks_under_different_names(
+    http: httpx2.AsyncClient, password_checks: list[bytes]
+) -> None:
+    data = await login_form(http)
+    responses: list[httpx2.Response] = []
+
+    for attempt in range(40):
+        data.update(username=f"guess-{attempt}", password="wrong-password")
+        response = await http.post("/authorize", data=data)
+
+        responses.append(response)
+
+    statuses = [response.status_code for response in responses]
+
+    assert statuses == [401] * 5 + [429] * 35
+    assert len(password_checks) == 5
+    assert "Start sign-in again" in responses[-1].text
+    assert "<form" not in responses[-1].text
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_a_server_wide_sign_in_limit_recovers_in_one_minute_and_preserves_connected_users(
+    http: httpx2.AsyncClient, clock: FakeClock, password_checks: list[bytes]
+) -> None:
+    tokens = await sign_in(http)
+
+    for attempt in range(59):
+        response = await fail_sign_in(http, f"guess-{attempt}", "wrong-password")
+
+        assert response.status_code == 401
+
+    known = await fail_sign_in(http, "jakub", PASSWORD)
+    unknown = await fail_sign_in(http, "stranger", PASSWORD)
+
+    assert known.status_code == unknown.status_code == 429
+    assert visible_page(known) == visible_page(unknown)
+    assert known.headers["retry-after"] == unknown.headers["retry-after"] == "60"
+    assert len(password_checks) == 60
+    assert (await http.get("/health")).status_code == 200
+    assert (await diary(http, tokens["access_token"])).status_code == 200
+    assert (await refresh(http, tokens["refresh_token"])).status_code == 200
+
+    clock.now += timedelta(seconds=30)
+    refused = await fail_sign_in(http, "another-guess", "wrong-password")
+
+    assert refused.status_code == 429
+    assert refused.headers["retry-after"] == "30"
+    assert len(password_checks) == 60
+
+    clock.now += timedelta(seconds=30)
+
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_a_sign_in_flood_has_two_password_workers_and_leaves_connected_users_working(
+    http: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tokens = await sign_in(http)
+    data = await login_form(http)
+    started = anyio.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    checks = 0
+    responses: list[httpx2.Response] = []
+
+    def derive(password: bytes, **parameters: Any) -> bytes:
+        nonlocal checks
+
+        with lock:
+            checks += 1
+
+            if checks == 2:
+                anyio.from_thread.run_sync(started.set)
+
+        assert release.wait(timeout=5), "Password workers were not released"
+
+        return bytes(64)
+
+    async def submit(username: str) -> None:
+        response = await http.post(
+            "/authorize",
+            data={"request": data["request"], "username": username, "password": "wrong-password"},
+        )
+
+        responses.append(response)
+
+    monkeypatch.setattr(hashlib, "scrypt", derive)
+
+    with anyio.fail_after(3):
+        async with anyio.create_task_group() as group:
+            group.start_soon(submit, "first-guess")
+            group.start_soon(submit, "second-guess")
+
+            try:
+                await started.wait()
+                overflow = await http.post(
+                    "/authorize",
+                    data={"request": data["request"], "username": "third-guess", "password": PASSWORD},
+                )
+
+                assert overflow.status_code == 429
+                assert overflow.headers["retry-after"] == "1"
+                assert checks == 2
+                assert (await http.get("/health")).status_code == 200
+                assert (await http.get("/.well-known/oauth-authorization-server")).status_code == 200
+                assert (await diary(http, tokens["access_token"])).status_code == 200
+                assert (await refresh(http, tokens["refresh_token"])).status_code == 200
+            finally:
+                release.set()
+
+    statuses = [response.status_code for response in responses]
+
+    assert statuses == [401, 401]
+
+    monkeypatch.undo()
+
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_cancelling_sign_in_requests_does_not_release_running_password_checks(
+    http: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = await login_form(http)
+    started = anyio.Event()
+    finished = anyio.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    checks = 0
+    completed = 0
+
+    def derive(password: bytes, **parameters: Any) -> bytes:
+        nonlocal checks, completed
+
+        with lock:
+            checks += 1
+            position = checks
+
+            if checks == 2:
+                anyio.from_thread.run_sync(started.set)
+
+        if position <= 2:
+            assert release.wait(timeout=5), "Password workers were not released"
+
+            with lock:
+                completed += 1
+
+                if completed == 2:
+                    anyio.from_thread.run_sync(finished.set)
+
+        return bytes(64)
+
+    monkeypatch.setattr(hashlib, "scrypt", derive)
+    tasks = [
+        asyncio.create_task(
+            http.post(
+                "/authorize",
+                data={"request": data["request"], "username": name, "password": "wrong-password"},
+            )
+        )
+        for name in ("first-guess", "second-guess")
+    ]
+
+    with anyio.fail_after(3):
+        try:
+            await started.wait()
+
+            for task in tasks:
+                task.cancel()
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+            overflow = await http.post(
+                "/authorize",
+                data={"request": data["request"], "username": "third-guess", "password": PASSWORD},
+            )
+
+            assert overflow.status_code == 429
+            assert checks == 2
+        finally:
+            release.set()
+            await finished.wait()

@@ -82,7 +82,9 @@ Authorization uses PKCE S256. Signed codes expire after sixty seconds and can be
 
 Claude renews access with a signed refresh token. Each refresh returns a new refresh token valid for thirty days, so a connector used at least once a month stays signed in. Nothing is stored server-side, so an earlier refresh token keeps working until it expires. To sign out every device of one user, for example after losing a phone, increase their `session_generation` and redeploy: all of their access and refresh tokens stop working, and they sign in again with the same password. Removing a user from `FATSECRET_MCP_USERS` invalidates their tokens and blocks their sign-in.
 
-After five failed sign-ins for one user name, sign-in with that name is paused for fifteen minutes, even with the correct password. The limit applies to every typed name in the same way, so it doesn't reveal which names exist. Someone who knows a user's `id` can therefore delay that user's next sign-in, but connectors that are already signed in keep working. The counters are kept in memory and reset when the server restarts.
+Sign-in allows at most sixty attempts across the server in a rolling minute and two password checks at a time. Extra attempts get HTTP 429 with `Retry-After`; rejected attempts do not extend the minute-long limit. Each sign-in form accepts at most five submissions, then asks you to start sign-in again from your connector.
+
+After five failed sign-ins for one user name, sign-in with that name is paused for fifteen minutes, even with the correct password. The limit applies to every typed name in the same way, so it doesn't reveal which names exist. Someone who knows a user's `id` can therefore delay that user's next sign-in, but connectors that are already signed in keep working. The counters remember at most 1,024 names and 1,024 forms, without scanning every name on each attempt. They are kept in memory and reset when the server restarts.
 
 ## Run with Docker
 

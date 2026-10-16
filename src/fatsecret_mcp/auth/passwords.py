@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import re
 import secrets
+from threading import BoundedSemaphore
 
 _PREFIX = "scrypt$32768$8$1$"
 _FORMAT = re.compile(r"scrypt\$32768\$8\$1\$[0-9a-f]{32}\$[0-9a-f]{128}")
@@ -15,6 +16,24 @@ DUMMY_PASSWORD_HASH = _PREFIX + "00" * 16 + "$" + "00" * 64
 _PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 _PASSWORD_GROUPS = 5
 _PASSWORD_GROUP_LENGTH = 4
+_PASSWORD_WORKERS = 2
+
+
+class PasswordChecks:
+    """Keep a password worker occupied until scrypt finishes, even if its request is cancelled."""
+
+    def __init__(self) -> None:
+        self._workers = BoundedSemaphore(_PASSWORD_WORKERS)
+
+    def verify(self, password: str, stored: str) -> bool | None:
+        """Check in a worker thread, or return None immediately when both workers are busy."""
+        if not self._workers.acquire(blocking=False):
+            return None
+
+        try:
+            return verify_password(password, stored)
+        finally:
+            self._workers.release()
 
 
 def generate_password() -> str:
