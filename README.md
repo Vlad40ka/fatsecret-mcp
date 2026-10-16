@@ -84,6 +84,39 @@ Claude renews access with a signed refresh token. Each refresh returns a new ref
 
 After five failed sign-ins for one user name, sign-in with that name is paused for fifteen minutes, even with the correct password. The limit applies to every typed name in the same way, so it doesn't reveal which names exist. Someone who knows a user's `id` can therefore delay that user's next sign-in, but connectors that are already signed in keep working. The counters are kept in memory and reset when the server restarts.
 
+## Run with Docker
+
+CI builds and tests the image on pull requests. After a successful push to `main`, it publishes `ghcr.io/<owner>/<repository>:latest` and a tag with the full commit SHA, for Linux amd64 and arm64. Replace `<owner>` and `<repository>` with your GitHub repository's namespace and name.
+
+The first publication creates a private GHCR package. The repository owner must change its visibility to **Public** in the package settings, then rerun CI. The final CI step checks that the published image can be pulled without signing in.
+
+Use the same HTTP configuration as above, supplied at runtime. Docker's `--env-file` expects `KEY=value` lines without shell quotes: keep `FATSECRET_MCP_USERS` as a single JSON line, removing the surrounding single quotes from the example above.
+
+```sh
+docker run --rm --env-file .env -p 8080:8080 \
+  -e FATSECRET_MCP_BASE_URL=http://127.0.0.1:8080 \
+  'ghcr.io/<owner>/<repository>:latest'
+```
+
+Leave the server running. In a second terminal, check its health:
+
+```sh
+curl --fail http://127.0.0.1:8080/health
+```
+
+Expect `{"status":"ok"}`. If the server is still starting, retry the request. To stop it, press Ctrl+C in the first terminal.
+
+The image starts HTTP on `0.0.0.0:8080`, runs as a non-root user, and checks `/health`. Set `PORT` to change the listening port and adjust the published port to match. On a container host, set `FATSECRET_MCP_BASE_URL` to its public HTTPS origin. Configuration and credentials are read only from the runtime environment.
+
+To build and test locally, with Docker running:
+
+```sh
+docker build -t fatsecret-mcp:local .
+FATSECRET_CONTAINER_IMAGE=fatsecret-mcp:local uv run pytest tests/test_container.py -v -s
+```
+
+The container tests use synthetic credentials, make no FatSecret calls, and report the time from starting the container to a healthy HTTP response. The build installs the locked runtime dependencies and compiles bytecode in a separate stage; the final image contains the installed package without build or development tools.
+
 ## Roadmap
 
 - **Your own recent foods.** Products you often log, such as local or branded ones the US catalog lacks, aren't searched yet. Reading them from your FatSecret diary took too many API requests, so this needs another approach, for example another food database whose product is then logged to FatSecret as a new entry.
