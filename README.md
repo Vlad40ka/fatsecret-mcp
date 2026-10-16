@@ -61,7 +61,11 @@ uv run --env-file .env fatsecret-mcp --transport http --host 127.0.0.1 --port 80
 
 `GET /health` returns only `{"status":"ok"}`. An unauthenticated request to `/mcp` returns `401` and the address of the OAuth metadata. Once the server is reachable over HTTPS, add its `/mcp` URL as a custom connector in Claude. Sign in with your user `id` and connector password. Claude's published client metadata supplies its allowed callbacks; the server fetches metadata only from `https://claude.ai` and does not offer dynamic client registration.
 
-Authorization uses PKCE S256. Signed codes expire after sixty seconds and can be exchanged once per running instance. Signed access tokens last one hour and are bound to this server and user. They survive a restart with the same configuration; the record of used codes is kept in memory. HTTP access logs are disabled because authorization URLs contain credentials. Refresh tokens and failed-attempt throttling are planned next; a connector currently needs to sign in again after its token expires.
+Authorization uses PKCE S256. Signed codes expire after sixty seconds and can be exchanged once per running instance. Signed access tokens last one hour and are bound to this server and user. They survive a restart with the same configuration; the record of used codes is kept in memory. HTTP access logs are disabled because authorization URLs contain credentials.
+
+Claude renews access with a signed refresh token. Each refresh returns a new refresh token valid for thirty days, so a connector used at least once a month stays signed in. Nothing is stored server-side, so an earlier refresh token keeps working until it expires. To sign out every device of one user, for example after losing a phone, increase their `session_generation` and redeploy: all of their access and refresh tokens stop working, and they sign in again with the same password. Removing a user from `FATSECRET_MCP_USERS` invalidates their tokens and blocks their sign-in.
+
+After five failed sign-ins for one user name, sign-in with that name is paused for fifteen minutes, even with the correct password. The limit applies to every typed name in the same way, so it doesn't reveal which names exist. Someone who knows a user's `id` can therefore delay that user's next sign-in, but connectors that are already signed in keep working. The counters are kept in memory and reset when the server restarts.
 
 ## Roadmap
 

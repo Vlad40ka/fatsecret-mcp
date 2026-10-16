@@ -65,7 +65,7 @@ def build_http_app(
         authorization_endpoint=AnyHttpUrl(base_url + "/authorize"),
         token_endpoint=AnyHttpUrl(base_url + "/token"),
         response_types_supported=["code"],
-        grant_types_supported=["authorization_code"],
+        grant_types_supported=["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported=["none"],
         code_challenge_methods_supported=["S256"],
         client_id_metadata_document_supported=True,

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from html import unescape
 from typing import Any
@@ -15,7 +16,7 @@ import pytest
 from pydantic import SecretStr
 
 from fatsecret_mcp.config.loader import HouseholdConfigError
-from fatsecret_mcp.config.models import Household
+from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
 from fatsecret_mcp.http import build_http_app
 from tests.conftest import FakeClock
@@ -72,6 +73,22 @@ async def http(
     clock: FakeClock,
     client_metadata: dict[str, object],
 ) -> AsyncIterator[httpx2.AsyncClient]:
+    async with serve(remote_household, fatsecret, clock, client_metadata) as client:
+        yield client
+
+
+@asynccontextmanager
+async def serve(
+    household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+    client_metadata: dict[str, object],
+) -> AsyncGenerator[httpx2.AsyncClient]:
+    """Start the connector app for a Household, as a deploy with that configuration would."""
+    base_url = household.public_base_url
+
+    assert base_url is not None
+
     def metadata_response(request: httpx2.Request) -> httpx2.Response:
         assert str(request.url) == CLIENT_ID
 
@@ -81,13 +98,13 @@ async def http(
         )
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(metadata_response)) as metadata_http:
-        app = build_http_app(remote_household, fatsecret, clock=clock, metadata_http=metadata_http)
+        app = build_http_app(household, fatsecret, clock=clock, metadata_http=metadata_http)
 
         async with (
             app.router.lifespan_context(app),
             httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app),
-                base_url=BASE_URL,
+                base_url=base_url,
             ) as client,
         ):
             yield client
@@ -145,6 +162,52 @@ async def exchange(http: httpx2.AsyncClient, code: str, **overrides: str) -> htt
     return await http.post("/token", data=data)
 
 
+async def refresh(http: httpx2.AsyncClient, refresh_token: str, **overrides: str) -> httpx2.Response:
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "refresh_token": refresh_token,
+        "resource": RESOURCE,
+    }
+
+    data.update(overrides)
+
+    return await http.post("/token", data=data)
+
+
+async def sign_in(http: httpx2.AsyncClient, username: str = "jakub") -> dict[str, Any]:
+    code = await authorize(http, username)
+    response = await exchange(http, code)
+
+    assert response.status_code == 200, response.text
+
+    return response.json()
+
+
+async def fail_sign_in(http: httpx2.AsyncClient, username: str, password: str) -> httpx2.Response:
+    data = await login_form(http)
+
+    data.update(username=username, password=password)
+
+    return await http.post("/authorize", data=data)
+
+
+def bump_if_jakub(user: User) -> User:
+    if user.id != "jakub":
+        return user
+
+    return user.model_copy(update={"session_generation": user.session_generation + 1})
+
+
+def visible_page(response: httpx2.Response) -> str:
+    """The login page without its signed request, which differs on every form."""
+    return re.sub(r'name="request" value="[^"]+"', 'name="request"', response.text)
+
+
+def with_users(household: Household, users: list[User]) -> Household:
+    return household.model_copy(update={"users": tuple(users)})
+
+
 async def diary(http: httpx2.AsyncClient, token: str) -> httpx2.Response:
     return await call_tool(http, token, "get_diary_day", {})
 
@@ -193,7 +256,7 @@ async def test_discovery_describes_the_resource_and_public_clients(http: httpx2.
     assert metadata["client_id_metadata_document_supported"] is True
     assert metadata["token_endpoint_auth_methods_supported"] == ["none"]
     assert metadata["code_challenge_methods_supported"] == ["S256"]
-    assert metadata["grant_types_supported"] == ["authorization_code"]
+    assert metadata["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert "registration_endpoint" not in metadata
 
     assert (await http.post("/register")).status_code == 404
@@ -358,27 +421,12 @@ async def test_a_token_for_another_resource_is_rejected_even_with_the_same_signi
     foreign_base = "https://foreign.example.com"
     foreign = remote_household.model_copy(update={"public_base_url": foreign_base})
 
-    def metadata_response(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(
-            status_code=200,
-            json=client_metadata,
-        )
+    async with serve(foreign, fatsecret, clock, client_metadata) as other:
+        code = await authorize(other, resource=foreign_base + "/mcp")
+        response = await exchange(other, code, resource=foreign_base + "/mcp")
 
-    async with httpx2.AsyncClient(transport=httpx2.MockTransport(metadata_response)) as metadata_http:
-        app = build_http_app(foreign, fatsecret, clock=clock, metadata_http=metadata_http)
-
-        async with (
-            app.router.lifespan_context(app),
-            httpx2.AsyncClient(
-                transport=httpx2.ASGITransport(app),
-                base_url=foreign_base,
-            ) as other,
-        ):
-            code = await authorize(other, resource=foreign_base + "/mcp")
-            response = await exchange(other, code, resource=foreign_base + "/mcp")
-
-            assert response.status_code == 200
-            token = response.json()["access_token"]
+        assert response.status_code == 200
+        token = response.json()["access_token"]
 
     assert (await diary(http, token)).status_code == 401
 
@@ -599,3 +647,208 @@ async def test_issued_credentials_can_be_used_after_starting_a_fresh_app(
         assert (await diary(restarted, token)).status_code == 200
 
     assert (await diary(http, token)).status_code == 200
+
+
+async def test_refresh_rotates_tokens_and_keeps_a_user_connected_for_weeks(
+    http: httpx2.AsyncClient, clock: FakeClock
+) -> None:
+    first = await sign_in(http)
+
+    assert first["refresh_token"] != first["access_token"]
+
+    clock.now += timedelta(days=29)
+
+    assert (await diary(http, first["access_token"])).status_code == 401
+
+    response = await refresh(http, first["refresh_token"])
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    second = response.json()
+
+    assert second["expires_in"] == 3600
+    assert second["scope"] == "diary"
+    assert second["refresh_token"] != first["refresh_token"]
+    assert (await diary(http, second["access_token"])).status_code == 200
+
+    clock.now += timedelta(days=29)
+
+    third = await refresh(http, second["refresh_token"])
+
+    assert third.status_code == 200
+    assert (await diary(http, third.json()["access_token"])).status_code == 200
+
+
+async def test_an_old_refresh_token_stays_valid_until_it_expires(
+    http: httpx2.AsyncClient, clock: FakeClock
+) -> None:
+    first = await sign_in(http)
+    rotated = await refresh(http, first["refresh_token"])
+
+    assert rotated.status_code == 200
+    assert (await refresh(http, first["refresh_token"])).status_code == 200
+
+    clock.now += timedelta(days=30)
+
+    expired = await refresh(http, first["refresh_token"])
+
+    assert expired.status_code == 400
+    assert expired.json()["error"] == "invalid_grant"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"client_id": "https://claude.ai/another-client"}, "invalid_grant"),
+        ({"resource": "https://another.example.com/mcp"}, "invalid_target"),
+        ({"resource": ""}, "invalid_target"),
+        ({"scope": "diary admin"}, "invalid_scope"),
+    ],
+)
+async def test_a_refresh_token_is_bound_to_its_client_resource_and_scope(
+    http: httpx2.AsyncClient, overrides: dict[str, str], error: str
+) -> None:
+    tokens = await sign_in(http)
+    response = await refresh(http, tokens["refresh_token"], **overrides)
+
+    assert response.status_code == 400
+    assert response.json() == {"error": error}
+
+    same_scope = await refresh(http, tokens["refresh_token"], scope="diary")
+    no_resource = await http.post(
+        "/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": CLIENT_ID,
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+
+    assert same_scope.status_code == 200
+    assert same_scope.json()["scope"] == "diary"
+    assert no_resource.status_code == 200
+
+
+async def test_codes_access_tokens_and_refresh_tokens_cannot_stand_in_for_each_other(
+    http: httpx2.AsyncClient,
+) -> None:
+    code = await authorize(http)
+    tokens = (await exchange(http, code)).json()
+
+    assert (await refresh(http, tokens["access_token"])).status_code == 400
+    assert (await refresh(http, code)).status_code == 400
+    assert (await refresh(http, "changed" + tokens["refresh_token"])).status_code == 400
+    assert (await diary(http, tokens["refresh_token"])).status_code == 401
+    assert (await exchange(http, tokens["refresh_token"])).status_code == 400
+
+
+async def test_bumping_a_session_generation_revokes_that_users_tokens_on_the_next_deploy(
+    http: httpx2.AsyncClient,
+    remote_household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+    client_metadata: dict[str, object],
+) -> None:
+    jakub = await sign_in(http, "jakub")
+    ola = await sign_in(http, "ola")
+    users = [bump_if_jakub(user) for user in remote_household.users]
+    bumped = with_users(remote_household, users)
+
+    async with serve(bumped, fatsecret, clock, client_metadata) as deployed:
+        assert (await diary(deployed, jakub["access_token"])).status_code == 401
+        assert (await refresh(deployed, jakub["refresh_token"])).json() == {"error": "invalid_grant"}
+        assert (await diary(deployed, ola["access_token"])).status_code == 200
+        assert (await refresh(deployed, ola["refresh_token"])).status_code == 200
+
+        signed_in_again = await sign_in(deployed, "jakub")
+
+        assert (await diary(deployed, signed_in_again["access_token"])).status_code == 200
+        assert (await refresh(deployed, signed_in_again["refresh_token"])).status_code == 200
+
+
+async def test_removing_a_user_revokes_their_tokens_and_blocks_their_sign_in(
+    http: httpx2.AsyncClient,
+    remote_household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+    client_metadata: dict[str, object],
+) -> None:
+    jakub = await sign_in(http, "jakub")
+    remaining = [user for user in remote_household.users if user.id != "jakub"]
+    without_jakub = with_users(remote_household, remaining)
+
+    async with serve(without_jakub, fatsecret, clock, client_metadata) as deployed:
+        removed = await fail_sign_in(deployed, "jakub", PASSWORD)
+        unknown = await fail_sign_in(deployed, "stranger", PASSWORD)
+
+        assert (await diary(deployed, jakub["access_token"])).status_code == 401
+        assert (await refresh(deployed, jakub["refresh_token"])).json() == {"error": "invalid_grant"}
+        assert removed.status_code == 401
+        assert visible_page(removed) == visible_page(unknown)
+        assert "location" not in removed.headers
+
+
+async def test_repeated_failed_sign_ins_are_throttled_without_revealing_whether_the_name_exists(
+    http: httpx2.AsyncClient, clock: FakeClock
+) -> None:
+    for _ in range(5):
+        assert (await fail_sign_in(http, "jakub", "wrong-password")).status_code == 401
+        assert (await fail_sign_in(http, "stranger", "wrong-password")).status_code == 401
+
+    known = await fail_sign_in(http, " JAKUB ", PASSWORD)
+    unknown = await fail_sign_in(http, "stranger", PASSWORD)
+
+    assert known.status_code == unknown.status_code == 429
+    assert visible_page(known) == visible_page(unknown)
+    assert known.headers["retry-after"] == unknown.headers["retry-after"] == "900"
+    assert "Too many sign-in attempts" in known.text
+    assert "location" not in known.headers
+    assert (await sign_in(http, "ola"))["access_token"]
+
+    clock.now += timedelta(minutes=15)
+
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_a_successful_sign_in_clears_earlier_failures_for_that_name(http: httpx2.AsyncClient) -> None:
+    for _ in range(4):
+        assert (await fail_sign_in(http, "jakub", "wrong-password")).status_code == 401
+
+    await sign_in(http, "jakub")
+
+    for _ in range(4):
+        assert (await fail_sign_in(http, "jakub", "wrong-password")).status_code == 401
+
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_failed_sign_ins_under_many_names_do_not_lock_out_the_household(
+    http: httpx2.AsyncClient,
+) -> None:
+    for attempt in range(30):
+        assert (await fail_sign_in(http, f"guess-{attempt}", "wrong-password")).status_code == 401
+
+    assert (await sign_in(http, "jakub"))["access_token"]
+
+
+async def test_very_long_names_share_one_throttle(http: httpx2.AsyncClient) -> None:
+    prefix = "x" * 200
+
+    for attempt in range(5):
+        assert (await fail_sign_in(http, f"{prefix}{attempt}", "wrong-password")).status_code == 401
+
+    assert (await fail_sign_in(http, prefix, "wrong-password")).status_code == 429
+
+
+async def test_simultaneous_failed_sign_ins_cannot_outrun_the_throttle(http: httpx2.AsyncClient) -> None:
+    import asyncio
+
+    data = await login_form(http)
+
+    data.update(username="jakub", password="wrong-password")
+
+    attempts = [http.post("/authorize", data=data) for _ in range(8)]
+    responses = await asyncio.gather(*attempts)
+    statuses = sorted([response.status_code for response in responses])
+
+    assert statuses == [401] * 5 + [429] * 3

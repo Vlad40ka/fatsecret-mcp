@@ -44,8 +44,9 @@ class CodeClaims(SignedValue):
     nonce: str
 
 
-class AccessClaims(SignedValue):
-    kind: Literal["access"] = "access"
+class SessionClaims(SignedValue):
+    """A signed-in User's connector session, as carried by its access and refresh tokens."""
+
     issuer: str
     audience: str
     user_id: str
@@ -53,3 +54,11 @@ class AccessClaims(SignedValue):
     client_id: str
     scopes: tuple[str, ...]
     nonce: str
+
+
+class AccessClaims(SessionClaims):
+    kind: Literal["access"] = "access"
+
+
+class RefreshClaims(SessionClaims):
+    kind: Literal["refresh"] = "refresh"

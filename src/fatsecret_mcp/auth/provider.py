@@ -11,14 +11,23 @@ from urllib.parse import urlencode, urlsplit
 import anyio
 import httpx2
 from mcp.server.auth.handlers.authorize import AuthorizationRequest
-from mcp.server.auth.handlers.token import AuthorizationCodeRequest
+from mcp.server.auth.handlers.token import AuthorizationCodeRequest, RefreshTokenRequest
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import ValidationError
+from starlette.datastructures import FormData
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from fatsecret_mcp.auth.models import AccessClaims, AuthorizationDetails, CodeClaims, LoginRequest
+from fatsecret_mcp.auth.models import (
+    AccessClaims,
+    AuthorizationDetails,
+    CodeClaims,
+    LoginRequest,
+    RefreshClaims,
+    SessionClaims,
+)
 from fatsecret_mcp.auth.passwords import DUMMY_PASSWORD_HASH, verify_password
+from fatsecret_mcp.auth.throttling import SignInThrottle
 from fatsecret_mcp.auth.tokens import InvalidCredential, open_token, pkce_challenge, seal_token
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.diary_day import Clock
@@ -27,6 +36,12 @@ _CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 _VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
 _COOKIE = "fatsecret_connector_login"
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+_ACCESS_LIFETIME = 3600
+# Every refresh issues a new refresh token with a fresh lifetime, so a connector that is used
+# at least once a month stays signed in. Earlier refresh tokens stay valid until they expire.
+_REFRESH_LIFETIME = 30 * 24 * 3600
+_INVALID_SIGN_IN = "Invalid user name or password."
+_THROTTLED_SIGN_IN = "Too many sign-in attempts. Try again in a few minutes."
 
 
 class ConnectorAuth:
@@ -40,6 +55,7 @@ class ConnectorAuth:
         self.issuer = self.base_url + "/"
         self.signing_key = household.signing_key.get_secret_value()
         self.used_codes: dict[str, float] = {}
+        self.throttle = SignInThrottle()
 
     async def authorize(self, request: Request) -> Response:
         if request.method == "POST":
@@ -132,13 +148,34 @@ class ConnectorAuth:
 
         username = str(form.get("username", "")).strip().casefold()
         password = str(form.get("password", ""))
+        retry_after = self.throttle.admit(username, self.clock().timestamp())
+
+        if retry_after is not None:
+            response = _login_page(
+                sealed,
+                login.authorization.redirect_uri,
+                alert=_THROTTLED_SIGN_IN,
+                status_code=429,
+            )
+
+            response.headers["Retry-After"] = str(retry_after)
+
+            return response
+
         user = self._user(username)
         stored = user.connector_password_hash if user else None
         password_hash = stored.get_secret_value() if stored else DUMMY_PASSWORD_HASH
         verified = await anyio.to_thread.run_sync(verify_password, password, password_hash)
 
         if user is None or not verified:
-            return _login_page(sealed, login.authorization.redirect_uri, error=True)
+            return _login_page(
+                sealed,
+                login.authorization.redirect_uri,
+                alert=_INVALID_SIGN_IN,
+                status_code=401,
+            )
+
+        self.throttle.succeeded(username)
 
         code = CodeClaims(
             authorization=login.authorization,
@@ -172,10 +209,16 @@ class ConnectorAuth:
             return _error("invalid_request")
 
         form = await request.form()
+        grant_type = form.get("grant_type")
 
-        if form.get("grant_type") != "authorization_code":
-            return _error("unsupported_grant_type")
+        if grant_type == "authorization_code":
+            return self._exchange_code(form)
+        if grant_type == "refresh_token":
+            return self._refresh(form)
 
+        return _error("unsupported_grant_type")
+
+    def _exchange_code(self, form: FormData) -> Response:
         try:
             params = AuthorizationCodeRequest.model_validate(form)
         except ValidationError:
@@ -211,20 +254,83 @@ class ConnectorAuth:
         self.used_codes = {nonce: expiry for nonce, expiry in self.used_codes.items() if expiry > now}
         self.used_codes[code.nonce] = code.expires_at
 
-        access = AccessClaims(
-            issuer=self.issuer,
-            audience=self.resource,
+        return self._issue_tokens(
             user_id=code.user_id,
             session_generation=code.session_generation,
             client_id=details.client_id,
             scopes=details.scopes,
-            expires_at=now + 3600,
+            now=now,
+        )
+
+    def _refresh(self, form: FormData) -> Response:
+        try:
+            params = RefreshTokenRequest.model_validate(form)
+        except ValidationError:
+            return _error("invalid_request")
+
+        # The refresh token is already bound to this resource, so an omitted indicator is fine.
+        if params.resource is not None and params.resource != self.resource:
+            return _error("invalid_target")
+
+        now = self.clock().timestamp()
+
+        try:
+            claims = open_token(params.refresh_token, self.signing_key, RefreshClaims, now=now)
+        except InvalidCredential:
+            return _error("invalid_grant")
+
+        if not self._current_session(claims) or params.client_id != claims.client_id:
+            return _error("invalid_grant")
+
+        # "diary" is the only scope, so a refresh can't narrow it: both tokens keep the grant.
+        requested = set(params.scope.split() if params.scope else [])
+        granted = set(claims.scopes)
+
+        if not requested <= granted:
+            return _error("invalid_scope")
+
+        return self._issue_tokens(
+            user_id=claims.user_id,
+            session_generation=claims.session_generation,
+            client_id=claims.client_id,
+            scopes=claims.scopes,
+            now=now,
+        )
+
+    def _issue_tokens(
+        self,
+        *,
+        user_id: str,
+        session_generation: int,
+        client_id: str,
+        scopes: tuple[str, ...],
+        now: float,
+    ) -> Response:
+        access = AccessClaims(
+            issuer=self.issuer,
+            audience=self.resource,
+            user_id=user_id,
+            session_generation=session_generation,
+            client_id=client_id,
+            scopes=scopes,
+            expires_at=now + _ACCESS_LIFETIME,
+            nonce=secrets.token_urlsafe(32),
+        )
+        refresh = RefreshClaims(
+            issuer=self.issuer,
+            audience=self.resource,
+            user_id=user_id,
+            session_generation=session_generation,
+            client_id=client_id,
+            scopes=scopes,
+            expires_at=now + _REFRESH_LIFETIME,
             nonce=secrets.token_urlsafe(32),
         )
         result = OAuthToken(
             access_token=seal_token(access, self.signing_key),
-            expires_in=3600,
-            scope=" ".join(details.scopes),
+            expires_in=_ACCESS_LIFETIME,
+            scope=" ".join(scopes),
+            refresh_token=seal_token(refresh, self.signing_key),
         )
 
         return JSONResponse(
@@ -238,15 +344,19 @@ class ConnectorAuth:
         except InvalidCredential:
             return None
 
-        if claims.issuer != self.issuer or claims.audience != self.resource:
-            return None
-
-        user = self._user(claims.user_id)
-
-        if user is None or user.session_generation != claims.session_generation:
+        if not self._current_session(claims):
             return None
 
         return claims
+
+    def _current_session(self, claims: SessionClaims) -> bool:
+        """Whether this server issued the session and its User's configuration still allows it."""
+        if claims.issuer != self.issuer or claims.audience != self.resource:
+            return False
+
+        user = self._user(claims.user_id)
+
+        return user is not None and user.session_generation == claims.session_generation
 
     def _user(self, user_id: str) -> User | None:
         try:
@@ -302,8 +412,10 @@ def _error(code: str) -> JSONResponse:
     )
 
 
-def _login_page(sealed: str, redirect_uri: str, *, error: bool = False) -> HTMLResponse:
-    message = '<p role="alert">Invalid user name or password.</p>' if error else ""
+def _login_page(
+    sealed: str, redirect_uri: str, *, alert: str | None = None, status_code: int = 200
+) -> HTMLResponse:
+    message = f'<p role="alert">{alert}</p>' if alert else ""
     callback = urlsplit(redirect_uri)
     callback_source = f"{callback.scheme}://{callback.netloc}{callback.path}"
     html = f"""<!doctype html>
@@ -330,6 +442,6 @@ def _login_page(sealed: str, redirect_uri: str, *, error: bool = False) -> HTMLR
 
     return HTMLResponse(
         content=html,
-        status_code=401 if error else 200,
+        status_code=status_code,
         headers=headers,
     )
