@@ -90,6 +90,8 @@ class User(ConfigModel):
     daily_targets: DailyTargets
     timezone: Annotated[ZoneInfo, BeforeValidator(_timezone)] = DEFAULT_TIMEZONE
     meal_hours: MealHours = Field(default_factory=MealHours)
+    connector_password_hash: SecretStr | None = None
+    session_generation: Annotated[int, Field(strict=True, ge=0)] = 0
 
     @property
     def fatsecret(self) -> AccessToken:
@@ -104,6 +106,7 @@ class Household(ConfigModel):
     consumer_secret: SecretStr
     signing_key: Annotated[SecretStr, Field(min_length=32)]
     users: tuple[User, ...]
+    public_base_url: str | None = None
 
     @property
     def consumer(self) -> ConsumerKey:

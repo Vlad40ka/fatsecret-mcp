@@ -1,0 +1,601 @@
+"""Connector sign-in through HTTP, followed by calls to the User's MCP tools."""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections.abc import AsyncIterator
+from datetime import date, timedelta
+from html import unescape
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import httpx2
+import pytest
+from pydantic import SecretStr
+
+from fatsecret_mcp.config.loader import HouseholdConfigError
+from fatsecret_mcp.config.models import Household
+from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
+from fatsecret_mcp.http import build_http_app
+from tests.conftest import FakeClock
+from tests.fatsecret.fake import FakeFatSecret, food_entry
+
+pytestmark = pytest.mark.anyio
+
+BASE_URL = "https://diary.example.com"
+RESOURCE = BASE_URL + "/mcp"
+CLIENT_ID = "https://claude.ai/api/oauth/mcp-oauth-client-metadata"
+CALLBACK = "https://claude.ai/api/mcp/auth_callback"
+PASSWORD = "correct-horse-battery"
+PASSWORD_HASH = (
+    "scrypt$32768$8$1$30313233343536373839616263646566$"
+    "45bc2b0be1732b0a114a7e40f77488990681517558e2f3b031cbf0246bb4d89149"
+    "adbef2390b15f2c7cb17c076a970b1eefabef68ff92acb9171a351d4f37832"
+)
+# The verifier/challenge pair from RFC 7636, Appendix B.
+VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+TODAY = date(
+    year=2026,
+    month=10,
+    day=14,
+)
+
+
+@pytest.fixture
+def remote_household(household: Household) -> Household:
+    users = [
+        user.model_copy(update={"connector_password_hash": SecretStr(PASSWORD_HASH)})
+        for user in household.users
+    ]
+
+    return household.model_copy(update={"public_base_url": BASE_URL, "users": tuple(users)})
+
+
+@pytest.fixture
+def client_metadata() -> dict[str, object]:
+    return {
+        "client_id": CLIENT_ID,
+        "client_name": "Claude",
+        "redirect_uris": [CALLBACK],
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+    }
+
+
+@pytest.fixture
+async def http(
+    remote_household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+    client_metadata: dict[str, object],
+) -> AsyncIterator[httpx2.AsyncClient]:
+    def metadata_response(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == CLIENT_ID
+
+        return httpx2.Response(
+            status_code=200,
+            json=client_metadata,
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(metadata_response)) as metadata_http:
+        app = build_http_app(remote_household, fatsecret, clock=clock, metadata_http=metadata_http)
+
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app),
+                base_url=BASE_URL,
+            ) as client,
+        ):
+            yield client
+
+
+async def login_form(http: httpx2.AsyncClient, **overrides: str) -> dict[str, str]:
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": CALLBACK,
+        "code_challenge": CHALLENGE,
+        "code_challenge_method": "S256",
+        "resource": RESOURCE,
+        "state": "client-state",
+    }
+
+    params.update(overrides)
+    response = await http.get("/authorize", params=params)
+
+    assert response.status_code == 200, response.text
+    hidden = re.search(r'name="request" value="([^"]+)"', response.text)
+
+    assert hidden is not None
+    return {"request": unescape(hidden.group(1))}
+
+
+async def authorize(http: httpx2.AsyncClient, username: str = "jakub", **overrides: str) -> str:
+    data = await login_form(http, **overrides)
+
+    data.update(username=username, password=PASSWORD)
+    response = await http.post("/authorize", data=data)
+
+    assert response.status_code == 302, response.text
+    callback = urlsplit(response.headers["location"])
+    query = parse_qs(callback.query)
+
+    assert callback._replace(query="").geturl() == CALLBACK
+    assert query["state"] == ["client-state"]
+    assert query["iss"] == [str(http.base_url).rstrip("/") + "/"]
+    return query["code"][0]
+
+
+async def exchange(http: httpx2.AsyncClient, code: str, **overrides: str) -> httpx2.Response:
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": CALLBACK,
+        "code": code,
+        "code_verifier": VERIFIER,
+        "resource": RESOURCE,
+    }
+
+    data.update(overrides)
+
+    return await http.post("/token", data=data)
+
+
+async def diary(http: httpx2.AsyncClient, token: str) -> httpx2.Response:
+    return await call_tool(http, token, "get_diary_day", {})
+
+
+async def call_tool(
+    http: httpx2.AsyncClient, token: str, name: str, arguments: dict[str, Any]
+) -> httpx2.Response:
+    return await http.post(
+        "/mcp",
+        headers={
+            "Authorization": "Bearer " + token,
+            "MCP-Protocol-Version": "2026-07-28",
+            "MCP-Method": "tools/call",
+            "MCP-Name": name,
+            "Accept": "application/json, text/event-stream",
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": arguments,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        },
+    )
+
+
+async def test_discovery_describes_the_resource_and_public_clients(http: httpx2.AsyncClient) -> None:
+    resource = await http.get("/.well-known/oauth-protected-resource/mcp")
+    authorization = await http.get("/.well-known/oauth-authorization-server")
+
+    assert resource.status_code == 200
+    assert resource.json()["resource"] == RESOURCE
+    assert resource.json()["authorization_servers"] == [BASE_URL + "/"]
+    assert authorization.status_code == 200
+    metadata = authorization.json()
+
+    assert metadata["issuer"] == BASE_URL + "/"
+    assert metadata["authorization_endpoint"] == BASE_URL + "/authorize"
+    assert metadata["token_endpoint"] == BASE_URL + "/token"
+    assert metadata["client_id_metadata_document_supported"] is True
+    assert metadata["token_endpoint_auth_methods_supported"] == ["none"]
+    assert metadata["code_challenge_methods_supported"] == ["S256"]
+    assert metadata["grant_types_supported"] == ["authorization_code"]
+    assert "registration_endpoint" not in metadata
+
+    assert (await http.post("/register")).status_code == 404
+
+
+async def test_health_is_public_but_mcp_requires_a_bearer_token(http: httpx2.AsyncClient) -> None:
+    health = await http.get("/health")
+    mcp = await http.post("/mcp", json={"jsonrpc": "2.0", "method": "tools/list", "id": 1})
+
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+    assert mcp.status_code == 401
+    assert (
+        'resource_metadata="' + BASE_URL + '/.well-known/oauth-protected-resource/mcp"'
+        in (mcp.headers["www-authenticate"])
+    )
+
+
+async def test_http_startup_requires_passwords_for_every_user(
+    household: Household, fatsecret: FakeFatSecret
+) -> None:
+    remote = household.model_copy(update={"public_base_url": BASE_URL})
+
+    with pytest.raises(HouseholdConfigError, match="connector_password_hash"):
+        build_http_app(remote, fatsecret)
+
+
+async def test_sign_in_then_pkce_exchange_allows_a_stateless_diary_call(
+    http: httpx2.AsyncClient, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    fatsecret.add_food_entry(
+        household.user("jakub").fatsecret,
+        food_entry("Owsianka", Meal.BREAKFAST, TODAY, kcal=350),
+    )
+    code = await authorize(http)
+    token = await exchange(http, code)
+
+    assert token.status_code == 200, token.text
+    assert token.json()["token_type"] == "Bearer"
+    assert token.json()["expires_in"] == 3600
+    assert token.headers["cache-control"] == "no-store"
+    response = await diary(http, token.json()["access_token"])
+
+    assert response.status_code == 200, response.text
+    assert "mcp-session-id" not in response.headers
+    result = response.json()["result"]
+
+    assert result["isError"] is False
+    assert result["structuredContent"]["totals"]["kcal"] == 350
+    assert result["structuredContent"]["daily_targets"]["kcal"] == 2500
+
+
+async def test_wrong_password_and_unknown_user_have_the_same_error(http: httpx2.AsyncClient) -> None:
+    data = await login_form(http)
+
+    data.update(username="jakub", password="wrong-password")
+    wrong_password = await http.post("/authorize", data=data)
+
+    data.update(username="stranger", password=PASSWORD)
+    unknown_user = await http.post("/authorize", data=data)
+
+    assert wrong_password.status_code == unknown_user.status_code == 401
+    assert wrong_password.text == unknown_user.text
+    assert "Invalid user name or password" in wrong_password.text
+    assert "location" not in wrong_password.headers
+    assert PASSWORD not in unknown_user.text
+    assert "Jakub" not in unknown_user.text
+    assert "Ola" not in unknown_user.text
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"code_verifier": "x" * 43},
+        {"code_verifier": "too-short"},
+        {"redirect_uri": "https://evil.example.com/callback"},
+        {"redirect_uri": "https://claude.ai:443/api/mcp/auth_callback"},
+        {"client_id": "https://claude.ai/another-client"},
+        {"resource": "https://another.example.com/mcp"},
+        {"resource": ""},
+    ],
+)
+async def test_the_code_is_bound_to_pkce_redirect_client_and_resource(
+    http: httpx2.AsyncClient, overrides: dict[str, str]
+) -> None:
+    code = await authorize(http)
+    response = await exchange(http, code, **overrides)
+
+    assert response.status_code == 400
+    assert "access_token" not in response.json()
+    assert (await exchange(http, code)).status_code == 200
+
+
+async def test_a_code_is_single_use_even_with_two_simultaneous_exchanges(http: httpx2.AsyncClient) -> None:
+    import asyncio
+
+    code = await authorize(http)
+    responses = await asyncio.gather(exchange(http, code), exchange(http, code))
+    statuses = sorted(response.status_code for response in responses)
+
+    assert statuses == [200, 400]
+
+
+async def test_a_code_expires_after_sixty_seconds(http: httpx2.AsyncClient, clock: FakeClock) -> None:
+    code = await authorize(http)
+
+    clock.now += timedelta(seconds=60)
+    response = await exchange(http, code)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"
+
+
+async def test_an_access_token_expires_after_one_hour(http: httpx2.AsyncClient, clock: FakeClock) -> None:
+    code = await authorize(http)
+    response = await exchange(http, code)
+    token = response.json()["access_token"]
+
+    clock.now += timedelta(seconds=3599)
+
+    assert (await diary(http, token)).status_code == 200
+
+    clock.now += timedelta(seconds=1)
+
+    assert (await diary(http, token)).status_code == 401
+
+
+async def test_two_signed_in_users_see_only_their_own_diary(
+    http: httpx2.AsyncClient, fatsecret: FakeFatSecret, household: Household
+) -> None:
+    import asyncio
+
+    fatsecret.add_food_entry(
+        household.user("jakub").fatsecret,
+        food_entry("Owsianka Jakuba", Meal.BREAKFAST, TODAY, kcal=350),
+    )
+    fatsecret.add_food_entry(
+        household.user("ola").fatsecret,
+        food_entry("Kanapka Oli", Meal.LUNCH, TODAY, kcal=420),
+    )
+    jakub_code = await authorize(http, "jakub")
+    jakub_token = (await exchange(http, jakub_code)).json()["access_token"]
+    ola_code = await authorize(http, "ola")
+    ola_token = (await exchange(http, ola_code)).json()["access_token"]
+    jakub, ola = await asyncio.gather(diary(http, jakub_token), diary(http, ola_token))
+
+    assert jakub.status_code == ola.status_code == 200
+    assert "Owsianka Jakuba" in jakub.text
+    assert "Kanapka Oli" not in jakub.text
+    assert "Kanapka Oli" in ola.text
+    assert "Owsianka Jakuba" not in ola.text
+    assert ola.json()["result"]["structuredContent"]["daily_targets"]["kcal"] == 1900
+
+
+async def test_a_token_for_another_resource_is_rejected_even_with_the_same_signing_key(
+    http: httpx2.AsyncClient,
+    remote_household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+    client_metadata: dict[str, object],
+) -> None:
+    foreign_base = "https://foreign.example.com"
+    foreign = remote_household.model_copy(update={"public_base_url": foreign_base})
+
+    def metadata_response(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            status_code=200,
+            json=client_metadata,
+        )
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(metadata_response)) as metadata_http:
+        app = build_http_app(foreign, fatsecret, clock=clock, metadata_http=metadata_http)
+
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app),
+                base_url=foreign_base,
+            ) as other,
+        ):
+            code = await authorize(other, resource=foreign_base + "/mcp")
+            response = await exchange(other, code, resource=foreign_base + "/mcp")
+
+            assert response.status_code == 200
+            token = response.json()["access_token"]
+
+    assert (await diary(http, token)).status_code == 401
+
+
+async def test_tampered_tokens_and_codes_are_rejected(http: httpx2.AsyncClient) -> None:
+    code = await authorize(http)
+
+    assert (await exchange(http, "changed" + code)).status_code == 400
+
+    token = (await exchange(http, code)).json()["access_token"]
+
+    assert (await diary(http, "changed" + token)).status_code == 401
+    assert (await diary(http, code)).status_code == 401
+
+
+async def test_passwords_codes_tokens_and_keys_never_appear_in_debug_logs(
+    http: httpx2.AsyncClient, remote_household: Household, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    code = await authorize(http)
+    response = await exchange(http, code)
+    token = response.json()["access_token"]
+
+    assert (await diary(http, token)).status_code == 200
+    assert (await exchange(http, "invalid-code-secret")).status_code == 400
+
+    for secret in [PASSWORD, PASSWORD_HASH, code, token, "invalid-code-secret"]:
+        assert secret not in caplog.text
+    assert remote_household.signing_key.get_secret_value() not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [
+        ("redirect_uri", "https://evil.example.com/callback"),
+        ("redirect_uri", CALLBACK + "/extra"),
+        ("resource", "https://evil.example.com/mcp"),
+        ("resource", ""),
+        ("code_challenge_method", "plain"),
+        ("code_challenge", "short"),
+        ("scope", "unknown-scope"),
+        ("client_id", "http://127.0.0.1/metadata"),
+        ("client_id", "https://169.254.169.254/metadata"),
+        ("client_id", "https://claude.ai.evil.example/metadata"),
+        ("client_id", "https://[malformed"),
+    ],
+)
+async def test_invalid_authorization_parameters_never_issue_a_code(
+    http: httpx2.AsyncClient, parameter: str, value: str
+) -> None:
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": CALLBACK,
+        "code_challenge": CHALLENGE,
+        "code_challenge_method": "S256",
+        "resource": RESOURCE,
+    }
+
+    params[parameter] = value
+    response = await http.get("/authorize", params=params)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert "set-cookie" not in response.headers
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("client_id", "https://claude.ai/another-identity"),
+        ("token_endpoint_auth_method", "client_secret_basic"),
+        ("redirect_uris", ["https://claude.ai/different-callback"]),
+    ],
+)
+async def test_the_published_client_identity_and_redirects_are_required(
+    http: httpx2.AsyncClient, client_metadata: dict[str, object], field: str, value: object
+) -> None:
+    client_metadata[field] = value
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "redirect_uri": CALLBACK,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 400
+
+
+async def test_the_login_form_requires_its_original_browser_cookie(http: httpx2.AsyncClient) -> None:
+    form = await login_form(http)
+
+    form.update(username="jakub", password=PASSWORD)
+    http.cookies.clear()
+    response = await http.post("/authorize", data=form)
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+async def test_login_headers_preserve_the_origin_and_allow_only_the_verified_callback(
+    http: httpx2.AsyncClient,
+) -> None:
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "redirect_uri": CALLBACK,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["referrer-policy"] == "same-origin"
+    assert "form-action 'self' " + CALLBACK in response.headers["content-security-policy"]
+
+
+async def test_the_login_form_rejects_cross_origin_submission(http: httpx2.AsyncClient) -> None:
+    form = await login_form(http)
+
+    form.update(username="jakub", password=PASSWORD)
+    response = await http.post("/authorize", data=form, headers={"Origin": "https://evil.example.com"})
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+
+
+async def test_a_changed_or_expired_login_request_cannot_be_submitted(
+    http: httpx2.AsyncClient, clock: FakeClock
+) -> None:
+    form = await login_form(http)
+
+    form.update(username="jakub", password=PASSWORD)
+    original = form["request"]
+    form["request"] = "changed" + original
+
+    assert (await http.post("/authorize", data=form)).status_code == 400
+
+    form["request"] = original
+    clock.now += timedelta(minutes=10)
+
+    assert (await http.post("/authorize", data=form)).status_code == 400
+
+
+async def test_http_confirmation_belongs_to_one_user_and_survives_separate_requests(
+    http: httpx2.AsyncClient, fatsecret: FakeFatSecret
+) -> None:
+    serving = Serving(
+        id="rice-100g",
+        description="100 g",
+        metric_amount=100,
+        metric_unit="g",
+        number_of_units=100,
+        nutrition=Nutrition(kcal=130),
+    )
+    food = Food(
+        id="rice",
+        name="Cooked Rice",
+        brand=None,
+        servings=[serving],
+    )
+
+    fatsecret.add_food(food)
+    jakub_code = await authorize(http, "jakub")
+    jakub_token = (await exchange(http, jakub_code)).json()["access_token"]
+    ola_code = await authorize(http, "ola")
+    ola_token = (await exchange(http, ola_code)).json()["access_token"]
+    proposal = await call_tool(
+        http,
+        jakub_token,
+        "draft_entries",
+        {"items": [{"food_id": "rice", "serving_id": "rice-100g", "number_of_units": 150}]},
+    )
+    draft_id = proposal.json()["result"]["structuredContent"]["draft_id"]
+    arguments = {"draft_id": draft_id}
+    wrong_user = await call_tool(http, ola_token, "confirm_draft", arguments)
+    first = await call_tool(http, jakub_token, "confirm_draft", arguments)
+    repeated = await call_tool(http, jakub_token, "confirm_draft", arguments)
+    jakub_day = await diary(http, jakub_token)
+    ola_day = await diary(http, ola_token)
+
+    assert wrong_user.json()["result"]["isError"] is True
+    assert first.json()["result"]["structuredContent"]["status"] == "confirmed"
+    assert repeated.json()["result"]["structuredContent"]["status"] == "already_confirmed"
+    assert jakub_day.json()["result"]["structuredContent"]["totals"]["kcal"] == 195
+    assert ola_day.json()["result"]["structuredContent"]["totals"]["kcal"] == 0
+
+
+async def test_issued_credentials_can_be_used_after_starting_a_fresh_app(
+    http: httpx2.AsyncClient,
+    remote_household: Household,
+    fatsecret: FakeFatSecret,
+    clock: FakeClock,
+) -> None:
+    code = await authorize(http)
+    app = build_http_app(remote_household, fatsecret, clock=clock)
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app),
+            base_url=BASE_URL,
+        ) as restarted,
+    ):
+        response = await exchange(restarted, code)
+
+        assert response.status_code == 200
+        token = response.json()["access_token"]
+
+        assert (await diary(restarted, token)).status_code == 200
+
+    assert (await diary(http, token)).status_code == 200

@@ -8,7 +8,7 @@ This project is unofficial. It is not affiliated with or endorsed by FatSecret, 
 
 ## Status
 
-Early development. The server runs locally over stdio, answers diary questions, searches foods, prepares drafts and saves the drafts you confirm. Drafts show amounts, calories, macros, assumptions, a suggested meal and the day's totals after adding. They expire after thirty minutes; nothing is written to your diary until you confirm one.
+Early development. The server runs locally over stdio or over HTTP with connector sign-in, answers diary questions, searches foods, prepares drafts and saves the drafts you confirm. Drafts show amounts, calories, macros, assumptions, a suggested meal and the day's totals after adding. They expire after thirty minutes; nothing is written to your diary until you confirm one.
 
 ## Run it locally
 
@@ -42,6 +42,26 @@ Then add the server to Claude Code:
 ```sh
 claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file .env fatsecret-mcp
 ```
+
+## Run over HTTP
+
+For HTTP, set `FATSECRET_MCP_BASE_URL` to the server's public HTTPS origin, for example `https://diary.example.com`. For local development, use `http://127.0.0.1:8000`. The value has no path, query or credentials; the connector URL is that origin plus `/mcp`.
+
+Each user needs a separate connector password. Hash it with scrypt using an interactive prompt:
+
+```sh
+uv run python -c 'from getpass import getpass; from fatsecret_mcp.auth.passwords import hash_password; print(hash_password(getpass("Connector password: ")))'
+```
+
+Put the resulting string in that user's `connector_password_hash` field inside `FATSECRET_MCP_USERS`. Their optional `session_generation` is an integer starting at `0`. Keep the existing instance signing key: it also signs connector credentials, using a separate signing context from drafts. Configuration errors stop the server before it starts listening.
+
+```sh
+uv run --env-file .env fatsecret-mcp --transport http --host 127.0.0.1 --port 8000
+```
+
+`GET /health` returns only `{"status":"ok"}`. An unauthenticated request to `/mcp` returns `401` and the address of the OAuth metadata. Once the server is reachable over HTTPS, add its `/mcp` URL as a custom connector in Claude. Sign in with your user `id` and connector password. Claude's published client metadata supplies its allowed callbacks; the server fetches metadata only from `https://claude.ai` and does not offer dynamic client registration.
+
+Authorization uses PKCE S256. Signed codes expire after sixty seconds and can be exchanged once per running instance. Signed access tokens last one hour and are bound to this server and user. They survive a restart with the same configuration; the record of used codes is kept in memory. HTTP access logs are disabled because authorization URLs contain credentials. Refresh tokens and failed-attempt throttling are planned next; a connector currently needs to sign in again after its token expires.
 
 ## Roadmap
 

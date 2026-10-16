@@ -6,7 +6,9 @@
   "daily_targets": {"kcal": 2000, "protein": 120, "fat": 70, "carbohydrate": 220},
   "timezone": "Europe/Warsaw"}]`.
 - `FATSECRET_MCP_USER`: over stdio, the id of the User the server acts as. Optional when there's only one.
-- `FATSECRET_MCP_SIGNING_KEY`: a persistent, random instance key of at least 32 characters for Drafts.
+- `FATSECRET_MCP_SIGNING_KEY`: a persistent, random instance key of at least 32 characters for signed values.
+- `FATSECRET_MCP_BASE_URL`: the HTTPS origin for remote HTTP; loopback HTTP is allowed for development.
+- Over HTTP each User needs a `connector_password_hash` (scrypt); `session_generation` defaults to zero.
 - Each User may set `meal_hours`: local start times as HH:MM for breakfast, lunch, dinner and snacks.
 
 Errors name the bad variable or field but never print a value, since most values here are secrets.
@@ -17,9 +19,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 
-from pydantic import SecretStr, TypeAdapter, ValidationError
+from pydantic import AnyHttpUrl, SecretStr, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 
+from fatsecret_mcp.auth.passwords import valid_password_hash
 from fatsecret_mcp.config.models import Household, User
 
 CONSUMER_KEY_VAR = "FATSECRET_CONSUMER_KEY"
@@ -27,6 +30,7 @@ CONSUMER_SECRET_VAR = "FATSECRET_CONSUMER_SECRET"
 USERS_VAR = "FATSECRET_MCP_USERS"
 ACTING_USER_VAR = "FATSECRET_MCP_USER"
 SIGNING_KEY_VAR = "FATSECRET_MCP_SIGNING_KEY"
+BASE_URL_VAR = "FATSECRET_MCP_BASE_URL"
 
 _USERS = TypeAdapter(list[User])
 
@@ -39,6 +43,7 @@ def load_household(environ: Mapping[str, str]) -> Household:
     consumer_key = _required(environ, CONSUMER_KEY_VAR)
     consumer_secret = _required(environ, CONSUMER_SECRET_VAR)
     signing_key = _required(environ, SIGNING_KEY_VAR)
+    public_base_url = _public_base_url(environ)
 
     if len(signing_key) < 32:
         raise HouseholdConfigError(f"{SIGNING_KEY_VAR} must contain at least 32 characters")
@@ -54,6 +59,7 @@ def load_household(environ: Mapping[str, str]) -> Household:
         raise HouseholdConfigError(f"{USERS_VAR} must list at least one User")
 
     _validate_meal_hours(users)
+    _validate_connector_passwords(users)
 
     repeated = _repeated_ids(users)
 
@@ -65,7 +71,26 @@ def load_household(environ: Mapping[str, str]) -> Household:
         consumer_secret=SecretStr(consumer_secret),
         signing_key=SecretStr(signing_key),
         users=tuple(users),
+        public_base_url=public_base_url,
     )
+
+
+def validate_http_household(household: Household) -> None:
+    """Fail before binding a public socket if connector sign-in is not configured."""
+    if household.public_base_url is None:
+        raise HouseholdConfigError(f"{BASE_URL_VAR} is required over HTTP")
+
+    for index, user in enumerate(household.users):
+        if user.connector_password_hash is None:
+            raise HouseholdConfigError(f"{USERS_VAR}[{index}].connector_password_hash is required over HTTP")
+
+
+def _validate_connector_passwords(users: list[User]) -> None:
+    for index, user in enumerate(users):
+        stored = user.connector_password_hash
+
+        if stored is not None and not valid_password_hash(stored.get_secret_value()):
+            raise HouseholdConfigError(f"{USERS_VAR}[{index}].connector_password_hash: invalid scrypt hash")
 
 
 def acting_user(household: Household, environ: Mapping[str, str]) -> User:
@@ -92,6 +117,25 @@ def _required(environ: Mapping[str, str], name: str) -> str:
         raise HouseholdConfigError(f"{name} is not set")
 
     return value
+
+
+def _public_base_url(environ: Mapping[str, str]) -> str | None:
+    if BASE_URL_VAR not in environ:
+        return None
+
+    try:
+        url = AnyHttpUrl(environ[BASE_URL_VAR])
+    except ValidationError:
+        raise HouseholdConfigError(f"{BASE_URL_VAR} must be a public HTTPS origin") from None
+
+    insecure = url.scheme != "https" and url.host not in ("localhost", "127.0.0.1", "[::1]")
+
+    if insecure or url.username or url.password or url.query or url.fragment or url.path not in (None, "/"):
+        raise HouseholdConfigError(
+            f"{BASE_URL_VAR} must be an HTTPS origin without credentials, path or query"
+        )
+
+    return str(url).rstrip("/")
 
 
 def _repeated_ids(users: list[User]) -> list[str]:

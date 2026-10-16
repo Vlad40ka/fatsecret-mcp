@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from fatsecret_mcp.auth.passwords import hash_password
 from fatsecret_mcp.config.loader import HouseholdConfigError, acting_user, load_household
 
 SECRETS = [
@@ -72,6 +73,60 @@ def test_a_users_timezone_defaults_to_europe_warsaw() -> None:
     household = load_household(environ(ola()))
 
     assert household.user("ola").timezone == ZoneInfo("Europe/Warsaw")
+
+
+def test_loads_the_public_url_and_session_generation() -> None:
+    household = load_household(
+        environ(ola(session_generation=3), FATSECRET_MCP_BASE_URL="https://diary.example.com")
+    )
+
+    assert household.public_base_url == "https://diary.example.com"
+    assert household.user("ola").session_generation == 3
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "not a url",
+        "http://diary.example.com",
+        "https://user:secret@example.com",
+        "https://example.com/path",
+        "https://example.com?secret=value",
+        "https://example.com#fragment",
+        "",
+    ],
+)
+def test_an_invalid_public_url_is_rejected_without_printing_it(url: str) -> None:
+    message = config_error(environ(ola(), FATSECRET_MCP_BASE_URL=url))
+
+    assert "FATSECRET_MCP_BASE_URL" in message
+    assert "secret" not in message
+
+
+@pytest.mark.parametrize("generation", [-1, "1", True, 1.5])
+def test_session_generation_is_a_nonnegative_integer(generation: object) -> None:
+    assert "session_generation" in config_error(environ(ola(session_generation=generation)))
+
+
+def test_loads_a_connector_password_hash_without_showing_it() -> None:
+    password_hash = hash_password("my-connector-password")
+    household = load_household(environ(ola(connector_password_hash=password_hash)))
+    stored = household.user("ola").connector_password_hash
+
+    assert stored is not None
+    assert stored.get_secret_value() == password_hash
+    assert password_hash not in repr(household)
+
+
+@pytest.mark.parametrize(
+    "password_hash",
+    ["", "plaintext-password", "scrypt$1073741824$8$1$salt$hash", "scrypt$32768$8$1$aa$bb"],
+)
+def test_a_malformed_or_unbounded_password_hash_is_rejected(password_hash: str) -> None:
+    message = config_error(environ(ola(connector_password_hash=password_hash)))
+
+    assert "[0].connector_password_hash" in message
+    assert "plaintext-password" not in message
 
 
 def test_secrets_never_show_in_a_printed_household() -> None:
