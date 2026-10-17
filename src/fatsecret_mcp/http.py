@@ -1,4 +1,8 @@
-"""The remote connector: discovery, sign-in and the authenticated MCP endpoint."""
+"""The remote connector's HTTP app: it composes the routes and starts each User's MCP tools.
+
+Sign-in and tokens live in `fatsecret_mcp.auth`. This module only turns a valid Bearer token
+into the SDK's authenticated User and sends the request to that User's own MCP app.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
-from fatsecret_mcp.auth.provider import ConnectorAuth
+from fatsecret_mcp.auth.connector import ConnectorAuth
+from fatsecret_mcp.auth.models import AccessClaims
 from fatsecret_mcp.config.loader import validate_http_household
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
@@ -45,9 +50,6 @@ def build_http_app(
 ) -> Starlette:
     validate_http_household(household)
 
-    base_url = household.public_base_url
-
-    assert base_url is not None
     metadata_client = metadata_http if metadata_http is not None else httpx2.AsyncClient(timeout=5)
     auth = ConnectorAuth(
         household=household,
@@ -60,27 +62,16 @@ def build_http_app(
         clock=clock,
         auth=auth,
     )
-    metadata = OAuthMetadata(
-        issuer=AnyHttpUrl(base_url),
-        authorization_endpoint=AnyHttpUrl(base_url + "/authorize"),
-        token_endpoint=AnyHttpUrl(base_url + "/token"),
-        response_types_supported=["code"],
-        grant_types_supported=["authorization_code", "refresh_token"],
-        token_endpoint_auth_methods_supported=["none"],
-        code_challenge_methods_supported=["S256"],
-        client_id_metadata_document_supported=True,
-        scopes_supported=["diary"],
-        authorization_response_iss_parameter_supported=True,
-    )
+    base_url = auth.identity.base_url
     routes = create_protected_resource_routes(
-        resource_url=AnyHttpUrl(base_url + "/mcp"),
+        resource_url=AnyHttpUrl(auth.identity.resource),
         authorization_servers=[AnyHttpUrl(base_url)],
         scopes_supported=["diary"],
     )
 
     authorization_metadata = Route(
         path="/.well-known/oauth-authorization-server",
-        endpoint=MetadataHandler(metadata).handle,
+        endpoint=MetadataHandler(_authorization_metadata(base_url)).handle,
     )
     health = Route(
         path="/health",
@@ -145,30 +136,25 @@ class _UserServers:
         self.protected = RequireAuthMiddleware(
             app=self._dispatch,
             required_scopes=["diary"],
-            resource_metadata_url=AnyHttpUrl(auth.base_url + "/.well-known/oauth-protected-resource/mcp"),
+            resource_metadata_url=AnyHttpUrl(
+                auth.identity.base_url + "/.well-known/oauth-protected-resource/mcp"
+            ),
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Mark the request with its User when the Bearer token is valid; the SDK refuses the rest."""
         request = Request(scope)
         scheme, _, raw_token = request.headers.get("authorization", "").partition(" ")
         claims = self.auth.authenticate(raw_token) if scheme.lower() == "bearer" else None
 
         if claims is not None:
-            token = AccessToken(
-                token=raw_token,
-                client_id=claims.client_id,
-                subject=claims.user_id,
-                scopes=list(claims.scopes),
-                resource=claims.audience,
-                claims={"iss": claims.issuer},
-            )
-
-            scope["user"] = AuthenticatedUser(token)
+            scope["user"] = AuthenticatedUser(_access_token(raw_token, claims))
             scope["auth"] = AuthCredentials(list(claims.scopes))
 
         await self.protected(scope, receive, send)
 
     async def _dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Send the request to the MCP app of the User named by its token."""
         principal = scope["user"]
 
         assert isinstance(principal, AuthenticatedUser)
@@ -197,8 +183,8 @@ class _UserServers:
             signing_key=self.household.signing_key,
         )
         security = TransportSecuritySettings(
-            allowed_hosts=[urlsplit(self.auth.base_url).netloc],
-            allowed_origins=[self.auth.base_url],
+            allowed_hosts=[urlsplit(self.auth.identity.base_url).netloc],
+            allowed_origins=[self.auth.identity.base_url],
         )
         app = server.streamable_http_app(
             stateless_http=True,
@@ -209,6 +195,33 @@ class _UserServers:
         async with app.router.lifespan_context(app):
             task_status.started(app)
             await anyio.sleep_forever()
+
+
+def _authorization_metadata(base_url: str) -> OAuthMetadata:
+    return OAuthMetadata(
+        issuer=AnyHttpUrl(base_url),
+        authorization_endpoint=AnyHttpUrl(base_url + "/authorize"),
+        token_endpoint=AnyHttpUrl(base_url + "/token"),
+        response_types_supported=["code"],
+        grant_types_supported=["authorization_code", "refresh_token"],
+        token_endpoint_auth_methods_supported=["none"],
+        code_challenge_methods_supported=["S256"],
+        client_id_metadata_document_supported=True,
+        scopes_supported=["diary"],
+        authorization_response_iss_parameter_supported=True,
+    )
+
+
+def _access_token(raw_token: str, claims: AccessClaims) -> AccessToken:
+    """Our verified claims, in the shape the SDK's auth middleware expects."""
+    return AccessToken(
+        token=raw_token,
+        client_id=claims.client_id,
+        subject=claims.user_id,
+        scopes=list(claims.scopes),
+        resource=claims.audience,
+        claims={"iss": claims.issuer},
+    )
 
 
 async def _health(request: Request) -> Response:
