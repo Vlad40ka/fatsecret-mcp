@@ -1,22 +1,80 @@
-"""Claude's published client metadata: its pinned identity and callback, and what it must allow."""
+"""Claude's published client metadata: its pinned identity and callback, what it must allow,
+and how rarely the server fetches it.
+"""
 
 from __future__ import annotations
 
+import math
+from collections import deque
+
+import anyio
 import httpx2
 from mcp.shared.auth import OAuthClientInformationFull
+
+from fatsecret_mcp.auth.models import FetchLimited
+from fatsecret_mcp.domain.diary_day import Clock
 
 # The identity and callback of Claude's web, desktop and mobile apps, pinned exactly,
 # so no other document on claude.ai can choose where a User's code is sent.
 CLAUDE_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata"
 CLAUDE_CALLBACKS = frozenset({"https://claude.ai/api/mcp/auth_callback"})
+CLIENT_LIFETIME = 3600
+FETCHES_PER_MINUTE = 10
 _MAX_METADATA_BYTES = 65536
 
 
-async def fetch_client(http: httpx2.AsyncClient, client_id: str) -> OAuthClientInformationFull | None:
-    """Claude's published client, or None for any other `client_id` or an unusable document."""
-    if client_id != CLAUDE_CLIENT_ID:
+class ClaudeMetadata:
+    """Claude's client metadata, kept for an hour and fetched one request at a time.
+
+    Only a usable document is kept, so a failed fetch is retried by the next sign-in. Fetches
+    are limited server-wide, so a flood of sign-in pages can't make claude.ai limit this server.
+    """
+
+    def __init__(self, http: httpx2.AsyncClient, clock: Clock) -> None:
+        self.http = http
+        self.clock = clock
+        self.cached: OAuthClientInformationFull | None = None
+        self.expires_at = 0.0
+        self.fetches: deque[float] = deque()
+        self.lock = anyio.Lock()
+
+    async def lookup(self, client_id: str) -> OAuthClientInformationFull | FetchLimited | None:
+        """Claude's client, a refusal while fetches are used up, or None for anything else."""
+        if client_id != CLAUDE_CLIENT_ID:
+            return None
+
+        async with self.lock:
+            # Read after waiting for the lock, which a slow fetch ahead may have held.
+            now = self.clock().timestamp()
+
+            if self.cached is not None and now < self.expires_at:
+                return self.cached
+
+            retry_after = self._admit_fetch(now)
+
+            if retry_after is not None:
+                return FetchLimited(retry_after=retry_after)
+
+            self.cached = await _fetch(self.http, client_id)
+            self.expires_at = now + CLIENT_LIFETIME
+
+            return self.cached
+
+    def _admit_fetch(self, now: float) -> int | None:
+        """At most ten fetches in any rolling minute; the seconds to wait once they're used up."""
+        while self.fetches and self.fetches[0] <= now - 60:
+            self.fetches.popleft()
+
+        if len(self.fetches) >= FETCHES_PER_MINUTE:
+            return math.ceil(self.fetches[0] + 60 - now)
+
+        self.fetches.append(now)
+
         return None
 
+
+async def _fetch(http: httpx2.AsyncClient, client_id: str) -> OAuthClientInformationFull | None:
+    """The published client, or None for an unusable document."""
     body = await _download(http, client_id)
 
     if body is None:

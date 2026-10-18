@@ -5,17 +5,16 @@ from __future__ import annotations
 import re
 import secrets
 
-import httpx2
 from mcp.server.auth.handlers.authorize import AuthorizationRequest
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
-from fatsecret_mcp.auth.client_metadata import CLAUDE_CALLBACKS, fetch_client
+from fatsecret_mcp.auth.client_metadata import CLAUDE_CALLBACKS, ClaudeMetadata
 from fatsecret_mcp.auth.login_page import login_page
-from fatsecret_mcp.auth.models import AuthorizationDetails, ConnectorIdentity, LoginRequest
-from fatsecret_mcp.auth.responses import oauth_error
+from fatsecret_mcp.auth.models import AuthorizationDetails, ConnectorIdentity, FetchLimited, LoginRequest
+from fatsecret_mcp.auth.responses import oauth_error, temporarily_unavailable
 from fatsecret_mcp.auth.tokens import seal_token
 from fatsecret_mcp.domain.diary_day import Clock
 
@@ -26,7 +25,7 @@ _SCOPE = "diary"
 
 
 async def start_authorization(
-    request: Request, *, identity: ConnectorIdentity, http: httpx2.AsyncClient, clock: Clock
+    request: Request, *, identity: ConnectorIdentity, claude_metadata: ClaudeMetadata, clock: Clock
 ) -> Response:
     try:
         params = AuthorizationRequest.model_validate(request.query_params)
@@ -38,8 +37,11 @@ async def start_authorization(
     if refusal is not None:
         return oauth_error(refusal)
 
-    client = await fetch_client(http, params.client_id)
+    client = await claude_metadata.lookup(params.client_id)
     redirect_uri = request.query_params.get("redirect_uri", "")
+
+    if isinstance(client, FetchLimited):
+        return temporarily_unavailable(client.retry_after)
 
     if client is None or not _is_allowed_callback(client, redirect_uri):
         return oauth_error("invalid_request")

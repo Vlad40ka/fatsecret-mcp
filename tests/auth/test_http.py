@@ -48,6 +48,34 @@ TODAY = date(
 )
 
 
+class MetadataStall:
+    """Holds Claude's metadata responses once started, as a slow claude.ai would."""
+
+    def __init__(self) -> None:
+        self.held: anyio.Event | None = None
+        self.reached = anyio.Event()
+        self.waiting = 0
+
+    def hold(self) -> None:
+        self.held = anyio.Event()
+
+    def release(self) -> None:
+        assert self.held is not None
+        self.held.set()
+
+    async def wait(self) -> None:
+        if self.held is None:
+            return
+
+        self.waiting += 1
+        self.reached.set()
+
+        try:
+            await self.held.wait()
+        finally:
+            self.waiting -= 1
+
+
 @pytest.fixture
 def remote_household(household: Household) -> Household:
     users = [
@@ -73,6 +101,11 @@ def client_metadata() -> dict[str, object]:
 @pytest.fixture
 def metadata_requests() -> list[str]:
     return []
+
+
+@pytest.fixture
+def metadata_stall() -> MetadataStall:
+    return MetadataStall()
 
 
 @pytest.fixture
@@ -105,8 +138,16 @@ async def http(
     clock: FakeClock,
     client_metadata: dict[str, object],
     metadata_requests: list[str],
+    metadata_stall: MetadataStall,
 ) -> AsyncIterator[httpx2.AsyncClient]:
-    async with serve(remote_household, fatsecret, clock, client_metadata, metadata_requests) as client:
+    async with serve(
+        remote_household,
+        fatsecret,
+        clock,
+        client_metadata,
+        metadata_requests,
+        metadata_stall,
+    ) as client:
         yield client
 
 
@@ -117,6 +158,7 @@ async def serve(
     clock: FakeClock,
     client_metadata: dict[str, object],
     metadata_requests: list[str] | None = None,
+    metadata_stall: MetadataStall | None = None,
 ) -> AsyncGenerator[httpx2.AsyncClient]:
     """Start the connector app for a Household, as a deploy with that configuration would."""
     base_url = household.public_base_url
@@ -124,8 +166,11 @@ async def serve(
 
     assert base_url is not None
 
-    def metadata_response(request: httpx2.Request) -> httpx2.Response:
+    stall = metadata_stall if metadata_stall is not None else MetadataStall()
+
+    async def metadata_response(request: httpx2.Request) -> httpx2.Response:
         fetched_urls.append(str(request.url))
+        await stall.wait()
 
         return httpx2.Response(
             status_code=200,
@@ -145,7 +190,8 @@ async def serve(
             yield client
 
 
-async def login_form(http: httpx2.AsyncClient, **overrides: str) -> dict[str, str]:
+async def open_authorize(http: httpx2.AsyncClient, **overrides: str) -> httpx2.Response:
+    """Claude opening the sign-in page, as its connector does."""
     params = {
         "response_type": "code",
         "client_id": CLIENT_ID,
@@ -157,7 +203,12 @@ async def login_form(http: httpx2.AsyncClient, **overrides: str) -> dict[str, st
     }
 
     params.update(overrides)
-    response = await http.get("/authorize", params=params)
+
+    return await http.get("/authorize", params=params)
+
+
+async def login_form(http: httpx2.AsyncClient, **overrides: str) -> dict[str, str]:
+    response = await open_authorize(http, **overrides)
 
     assert response.status_code == 200, response.text
     hidden = re.search(r'name="request" value="([^"]+)"', response.text)
@@ -654,6 +705,121 @@ async def test_the_sign_in_page_names_the_host_that_receives_the_code(
     assert response.status_code == 200
     assert "your browser returns to <strong>claude.ai</strong>" in visible_page(response)
     assert metadata_requests == [CLIENT_ID]
+
+
+async def test_claudes_metadata_is_fetched_once_an_hour(
+    http: httpx2.AsyncClient, clock: FakeClock, metadata_requests: list[str]
+) -> None:
+    for _ in range(3):
+        await login_form(http)
+
+    assert metadata_requests == [CLIENT_ID]
+
+    clock.now += timedelta(minutes=59)
+
+    await login_form(http)
+
+    assert metadata_requests == [CLIENT_ID]
+
+    clock.now += timedelta(minutes=1)
+
+    await login_form(http)
+
+    assert metadata_requests == [CLIENT_ID, CLIENT_ID]
+
+
+async def test_metadata_fetches_are_limited_server_wide_and_failures_are_not_kept(
+    http: httpx2.AsyncClient,
+    client_metadata: dict[str, object],
+    clock: FakeClock,
+    metadata_requests: list[str],
+) -> None:
+    client_metadata["token_endpoint_auth_method"] = "client_secret_basic"
+
+    for _ in range(10):
+        assert (await open_authorize(http)).status_code == 400
+
+    refused = await open_authorize(http)
+
+    assert len(metadata_requests) == 10
+    assert refused.status_code == 503
+    assert refused.json()["error"] == "temporarily_unavailable"
+    assert refused.headers["retry-after"] == "60"
+    assert "set-cookie" not in refused.headers
+
+    client_metadata["token_endpoint_auth_method"] = "none"
+    clock.now += timedelta(seconds=60)
+
+    await login_form(http)
+
+    assert len(metadata_requests) == 11
+
+
+async def test_slow_metadata_under_an_authorize_flood_leaves_signed_in_users_working(
+    http: httpx2.AsyncClient,
+    clock: FakeClock,
+    metadata_requests: list[str],
+    metadata_stall: MetadataStall,
+) -> None:
+    signed_in = await sign_in(http)
+    clock.now += timedelta(hours=1)
+
+    tokens = (await refresh(http, signed_in["refresh_token"])).json()
+    forms: list[dict[str, str]] = []
+
+    async def open_form() -> None:
+        forms.append(await login_form(http))
+
+    metadata_stall.hold()
+
+    with anyio.fail_after(3):
+        async with anyio.create_task_group() as group:
+            for _ in range(50):
+                group.start_soon(open_form)
+
+            try:
+                await metadata_stall.reached.wait()
+
+                assert (await diary(http, tokens["access_token"])).status_code == 200
+                assert metadata_stall.waiting == 1
+            finally:
+                metadata_stall.release()
+
+    assert len(forms) == 50
+    assert metadata_requests == [CLIENT_ID, CLIENT_ID]
+
+
+async def test_the_served_connector_fetches_claudes_metadata_without_the_fatsecret_client(
+    remote_household: Household, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fatsecret_mcp.cli.serve
+    import fatsecret_mcp.http
+
+    built: list[dict[str, object]] = []
+
+    class Built(Exception):
+        pass
+
+    def load(environ: object) -> Household:
+        return remote_household
+
+    def record(household: Household, fatsecret: object, **options: object) -> None:
+        built.append(options)
+
+        raise Built
+
+    monkeypatch.setattr(fatsecret_mcp.cli.serve, "load_household", load)
+    monkeypatch.setattr(fatsecret_mcp.http, "build_http_app", record)
+
+    with pytest.raises(Built):
+        await fatsecret_mcp.cli.serve.serve(
+            {},
+            transport="http",
+            host="127.0.0.1",
+            port=0,
+        )
+
+    assert built == [{}]
 
 
 async def test_the_login_form_requires_its_original_browser_cookie(http: httpx2.AsyncClient) -> None:

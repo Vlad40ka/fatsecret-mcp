@@ -20,3 +20,13 @@ def oauth_error(code: str) -> JSONResponse:
         status_code=400,
         headers=NO_STORE,
     )
+
+
+def temporarily_unavailable(retry_after: int) -> JSONResponse:
+    headers = NO_STORE | {"Retry-After": str(retry_after)}
+
+    return JSONResponse(
+        content={"error": "temporarily_unavailable"},
+        status_code=503,
+        headers=headers,
+    )

@@ -45,6 +45,17 @@ class SignedValue(BaseModel):
     expires_at: float
 
 
+class FetchLimited(BaseModel):
+    """Claude's client metadata may not be fetched again for `retry_after` seconds."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+    )
+
+    retry_after: int
+
+
 class AuthorizationDetails(BaseModel):
     model_config = ConfigDict(
         frozen=True,

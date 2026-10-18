@@ -1,4 +1,5 @@
-"""The connector's OAuth endpoints, sharing one set of sign-in limits, password workers and spent codes.
+"""The connector's OAuth endpoints, sharing one set of sign-in limits, password workers, spent codes
+and Claude's client metadata.
 
 Each endpoint's steps live in its own module: `authorization` shows the sign-in page, `sign_in`
 checks the password and issues a code, `grants` exchanges codes and refresh tokens, and `sessions`
@@ -12,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from fatsecret_mcp.auth.authorization import start_authorization
+from fatsecret_mcp.auth.client_metadata import ClaudeMetadata
 from fatsecret_mcp.auth.grants import SpentCodes, grant_tokens
 from fatsecret_mcp.auth.models import AccessClaims, ConnectorIdentity
 from fatsecret_mcp.auth.passwords import PasswordChecks
@@ -27,8 +29,8 @@ class ConnectorAuth:
 
     def __init__(self, household: Household, http: httpx2.AsyncClient, clock: Clock) -> None:
         self.household = household
-        self.http = http
         self.clock = clock
+        self.claude_metadata = ClaudeMetadata(http, clock)
         self.identity = ConnectorIdentity.of(household)
         self.spent_codes = SpentCodes()
         self.throttle = SignInThrottle()
@@ -49,7 +51,7 @@ class ConnectorAuth:
         return await start_authorization(
             request,
             identity=self.identity,
-            http=self.http,
+            claude_metadata=self.claude_metadata,
             clock=self.clock,
         )
 

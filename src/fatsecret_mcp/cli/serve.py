@@ -59,7 +59,7 @@ async def _serve_http(household: Household, host: str, port: int) -> None:
             consumer=household.consumer,
             http=http,
         )
-        app = build_http_app(household, fatsecret, metadata_http=http)
+        app = build_http_app(household, fatsecret)
         config = uvicorn.Config(
             app=app,
             host=host,

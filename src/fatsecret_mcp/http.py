@@ -50,7 +50,7 @@ def build_http_app(
 ) -> Starlette:
     validate_http_household(household)
 
-    metadata_client = metadata_http if metadata_http is not None else httpx2.AsyncClient(timeout=5)
+    metadata_client = metadata_http if metadata_http is not None else _metadata_client()
     auth = ConnectorAuth(
         household=household,
         http=metadata_client,
@@ -195,6 +195,19 @@ class _UserServers:
         async with app.router.lifespan_context(app):
             task_status.started(app)
             await anyio.sleep_forever()
+
+
+def _metadata_client() -> httpx2.AsyncClient:
+    """Its own two connections, so slow claude.ai fetches never hold the FatSecret client's."""
+    limits = httpx2.Limits(
+        max_connections=2,
+        max_keepalive_connections=2,
+    )
+
+    return httpx2.AsyncClient(
+        timeout=5,
+        limits=limits,
+    )
 
 
 def _authorization_metadata(base_url: str) -> OAuthMetadata:
