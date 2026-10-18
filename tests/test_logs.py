@@ -13,6 +13,7 @@ from pydantic import SecretStr
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.domain.draft_token import seal_draft
 from fatsecret_mcp.domain.models import Draft, DraftEntry, Meal
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
@@ -89,6 +90,7 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
             fatsecret=gateway,
             clock=CLOCK,
             signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
         )
 
         async with Client(server) as client:

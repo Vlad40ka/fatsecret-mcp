@@ -34,6 +34,7 @@ from fatsecret_mcp.auth.models import AccessClaims
 from fatsecret_mcp.config.loader import validate_http_household
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 
 # HTTP client debug logs can contain the authorization query or a token response.
@@ -181,6 +182,7 @@ class _UserServers:
             fatsecret=self.fatsecret,
             clock=self.clock,
             signing_key=self.household.signing_key,
+            daily_requests=daily_budget(len(self.household.users)),
         )
         security = TransportSecuritySettings(
             allowed_hosts=[urlsplit(self.auth.identity.base_url).netloc],

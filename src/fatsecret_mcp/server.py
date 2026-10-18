@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from fatsecret_mcp.config.models import User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
+from fatsecret_mcp.fatsecret.budget import BudgetedGateway, DailyBudget
 from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from fatsecret_mcp.tools import (
@@ -63,10 +64,23 @@ def build_server(
     clock: Clock = system_clock,
     *,
     signing_key: SecretStr,
+    daily_requests: int,
 ) -> MCPServer:
-    """The MCP server acting as `user`: it reads their diary and writes the Drafts they confirm."""
-    diary = UserDiary(
+    """The MCP server acting as `user`: it reads their diary and writes the Drafts they confirm.
+
+    Every FatSecret request it makes counts towards the User's `daily_requests`.
+    """
+    budget = DailyBudget(
+        requests=daily_requests,
+        timezone=user.timezone,
+        clock=clock,
+    )
+    budgeted = BudgetedGateway(
         fatsecret=fatsecret,
+        budget=budget,
+    )
+    diary = UserDiary(
+        fatsecret=budgeted,
         user=user.fatsecret,
         timezone=user.timezone,
         clock=clock,
@@ -88,8 +102,8 @@ def build_server(
 
     get_diary_day.register(server, user, diary, clock)
     get_period_summary.register(server, user, diary)
-    search_foods.register(server, fatsecret)
-    draft_entries.register(server, user, fatsecret, diary, clock, signing_key)
-    confirm_draft.register(server, user, fatsecret, diary, clock, signing_key)
+    search_foods.register(server, budgeted)
+    draft_entries.register(server, user, budgeted, diary, clock, signing_key)
+    confirm_draft.register(server, user, budgeted, diary, clock, signing_key)
 
     return server

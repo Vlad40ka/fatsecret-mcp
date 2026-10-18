@@ -10,6 +10,7 @@ from mcp import Client
 
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.config.models import Household
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.fatsecret.fake import FakeFatSecret
@@ -111,6 +112,7 @@ def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) ->
             fatsecret=fatsecret,
             clock=clock,
             signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
         )
 
         return Client(server)

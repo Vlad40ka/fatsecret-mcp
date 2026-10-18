@@ -1,0 +1,97 @@
+"""Each User's share of the Household's daily FatSecret quota, counted in memory.
+
+FatSecret allows 5,000 requests a day for the server's consumer key. Each User may make an equal
+share of 4,500 of them in any 24 hours, which leaves the rest for the Operator's commands. A rolling
+window keeps the Household under the quota whenever FatSecret's own day starts. The counts are
+forgotten on restart.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from fatsecret_mcp.domain.diary_day import Clock
+from fatsecret_mcp.domain.models import CatalogFood, DraftEntry, Food, FoodEntry, Meal, Nutrition
+from fatsecret_mcp.fatsecret.errors import BudgetSpent
+from fatsecret_mcp.fatsecret.gateway import AccessToken, FatSecretGateway, RequestToken
+
+FATSECRET_DAILY_QUOTA = 5000
+OPERATOR_RESERVE = 500
+WINDOW = timedelta(hours=24)
+
+
+def daily_budget(user_count: int) -> int:
+    """Each User's requests in 24 hours, so the whole Household fits under FatSecret's quota."""
+    return (FATSECRET_DAILY_QUOTA - OPERATOR_RESERVE) // user_count
+
+
+class DailyBudget:
+    """At most `requests` FatSecret requests in any 24 hours; each frees up a day after it was made."""
+
+    def __init__(self, requests: int, timezone: ZoneInfo, clock: Clock) -> None:
+        self._requests = requests
+        self._timezone = timezone
+        self._clock = clock
+        self._spent: deque[datetime] = deque()
+
+    def spend(self) -> None:
+        """Count one request, or refuse it before it's sent once the budget is spent."""
+        now = self._clock()
+
+        while self._spent and self._spent[0] + WINDOW <= now:
+            self._spent.popleft()
+
+        if len(self._spent) >= self._requests:
+            frees_up_at = (self._spent[0] + WINDOW).astimezone(self._timezone)
+
+            raise BudgetSpent(self._requests, frees_up_at)
+
+        self._spent.append(now)
+
+
+class BudgetedGateway:
+    """The FatSecret gateway as one User's tools see it: every request counts towards their budget."""
+
+    def __init__(self, fatsecret: FatSecretGateway, budget: DailyBudget) -> None:
+        self._fatsecret = fatsecret
+        self._budget = budget
+
+    async def search_catalog(self, query: str, *, max_results: int | None = None) -> list[CatalogFood]:
+        self._budget.spend()
+
+        return await self._fatsecret.search_catalog(query, max_results=max_results)
+
+    async def get_food(self, food_id: str) -> Food:
+        self._budget.spend()
+
+        return await self._fatsecret.get_food(food_id)
+
+    async def list_food_entries(self, user: AccessToken, day: date) -> list[FoodEntry]:
+        self._budget.spend()
+
+        return await self._fatsecret.list_food_entries(user, day)
+
+    async def get_month_totals(self, user: AccessToken, month: date) -> dict[date, Nutrition]:
+        self._budget.spend()
+
+        return await self._fatsecret.get_month_totals(user, month)
+
+    async def create_food_entry(self, user: AccessToken, entry: DraftEntry, meal: Meal, day: date) -> str:
+        self._budget.spend()
+
+        return await self._fatsecret.create_food_entry(user, entry, meal, day)
+
+    async def request_token(self) -> RequestToken:
+        self._budget.spend()
+
+        return await self._fatsecret.request_token()
+
+    def authorize_url(self, request_token: RequestToken) -> str:
+        return self._fatsecret.authorize_url(request_token)
+
+    async def exchange_pin(self, request_token: RequestToken, pin: str) -> AccessToken:
+        self._budget.spend()
+
+        return await self._fatsecret.exchange_pin(request_token, pin)

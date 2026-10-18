@@ -30,6 +30,7 @@ async def serve(environ: Mapping[str, str], *, transport: Transport, host: str, 
 async def _serve_stdio(household: Household, user: User) -> None:
     import httpx2
 
+    from fatsecret_mcp.fatsecret.budget import daily_budget
     from fatsecret_mcp.fatsecret.client import FatSecretApi
     from fatsecret_mcp.server import build_server
 
@@ -42,6 +43,7 @@ async def _serve_stdio(household: Household, user: User) -> None:
             user=user,
             fatsecret=fatsecret,
             signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
         )
 
         await server.run_stdio_async()

@@ -14,6 +14,7 @@ from fatsecret_mcp.cli.add_user import add_user
 from fatsecret_mcp.config.loader import HouseholdConfigError, load_household
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.errors import PinRejected
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 from fatsecret_mcp.server import build_server
@@ -141,6 +142,7 @@ async def test_a_user_added_by_add_user_can_draft_and_confirm_food_entries(clock
         fatsecret=fatsecret,
         clock=clock,
         signing_key=household.signing_key,
+        daily_requests=daily_budget(len(household.users)),
     )
     items = [{"food_id": "rice", "serving_id": "rice-100g", "number_of_units": 150}]
 

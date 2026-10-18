@@ -11,6 +11,7 @@ import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.models import Household
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import FatSecretError, TooManyActions
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
@@ -261,6 +262,7 @@ async def test_a_failed_history_scan_cancels_remaining_reads_instead_of_sending_
             fatsecret=gateway,
             clock=clock,
             signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
         )
 
         async with Client(server) as client:
@@ -294,6 +296,7 @@ async def test_throttling_a_search_also_stops_other_tools_during_the_same_cooldo
             fatsecret=gateway,
             clock=clock,
             signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
         )
 
         async with Client(server) as client:

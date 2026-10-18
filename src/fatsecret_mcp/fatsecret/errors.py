@@ -6,6 +6,8 @@ Every error's message is written for the User and the Operator and holds no secr
 
 from __future__ import annotations
 
+from datetime import datetime
+
 
 class FatSecretError(Exception):
     """A FatSecret call failed."""
@@ -31,6 +33,19 @@ class DailyQuotaExceeded(FatSecretError):
         super().__init__(
             "This server has used up its daily FatSecret request quota. "
             "Try again later; the quota resets daily."
+        )
+
+
+class BudgetSpent(FatSecretError):
+    """This User's share of the daily quota is spent; the request wasn't sent to FatSecret."""
+
+    def __init__(self, requests: int, frees_up_at: datetime) -> None:
+        when = f"{frees_up_at:%H:%M} on {frees_up_at.day} {frees_up_at:%B} ({frees_up_at.tzinfo})"
+
+        super().__init__(
+            f"This User's daily FatSecret budget of {requests} requests is spent, so nothing was sent. "
+            f"Each request frees up 24 hours after it was made; the next one at {when}. "
+            "The rest of the Household isn't affected."
         )
 
 

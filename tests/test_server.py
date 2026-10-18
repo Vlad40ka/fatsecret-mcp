@@ -14,6 +14,7 @@ from mcp import Client
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import FoodEntry, Meal
 from fatsecret_mcp.fatsecret import diary as diary_module
+from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
@@ -83,6 +84,7 @@ async def test_stopping_the_server_releases_unexpired_entries_even_if_the_server
         fatsecret=fatsecret,
         clock=clock,
         signing_key=household.signing_key,
+        daily_requests=daily_budget(len(household.users)),
     )
 
     async with Client(server) as client:
