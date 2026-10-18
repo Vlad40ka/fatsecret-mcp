@@ -17,7 +17,7 @@ def login_page(
 ) -> HTMLResponse:
     """The page with a sign-in form for the sealed login request, or only the alert without one."""
     message = f'<p role="alert">{alert}</p>' if alert else ""
-    form = _form(sealed) if sealed is not None else ""
+    form = _form(sealed, redirect_uri) if sealed is not None else ""
 
     return HTMLResponse(
         content=_document(message, form),
@@ -39,8 +39,11 @@ def throttled_page(sealed: str, redirect_uri: str, retry_after: int) -> HTMLResp
     return response
 
 
-def _form(sealed: str) -> str:
-    return f"""<form method="post" action="/authorize">
+def _form(sealed: str, redirect_uri: str) -> str:
+    callback_host = urlsplit(redirect_uri).hostname or ""
+
+    return f"""<p>After you sign in, your browser returns to <strong>{escape(callback_host)}</strong>.</p>
+<form method="post" action="/authorize">
 <input type="hidden" name="request" value="{escape(sealed, quote=True)}">
 <p><label>User name <input name="username" autocomplete="username" required></label></p>
 <p><label>Connector password <input type="password" name="password" autocomplete="current-password" required>

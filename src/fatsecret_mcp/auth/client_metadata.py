@@ -1,18 +1,20 @@
-"""Claude's published client metadata: where it may be fetched from and what it must allow."""
+"""Claude's published client metadata: its pinned identity and callback, and what it must allow."""
 
 from __future__ import annotations
-
-from urllib.parse import urlsplit
 
 import httpx2
 from mcp.shared.auth import OAuthClientInformationFull
 
+# The identity and callback of Claude's web, desktop and mobile apps, pinned exactly,
+# so no other document on claude.ai can choose where a User's code is sent.
+CLAUDE_CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata"
+CLAUDE_CALLBACKS = frozenset({"https://claude.ai/api/mcp/auth_callback"})
 _MAX_METADATA_BYTES = 65536
 
 
 async def fetch_client(http: httpx2.AsyncClient, client_id: str) -> OAuthClientInformationFull | None:
-    """The client that `client_id` names, or None when it isn't a public Claude client."""
-    if not _is_claude_url(client_id):
+    """Claude's published client, or None for any other `client_id` or an unusable document."""
+    if client_id != CLAUDE_CLIENT_ID:
         return None
 
     body = await _download(http, client_id)
@@ -29,23 +31,6 @@ async def fetch_client(http: httpx2.AsyncClient, client_id: str) -> OAuthClientI
         return None
 
     return client
-
-
-def _is_claude_url(client_id: str) -> bool:
-    # This Household connector trusts Claude's published identity. Restrict the fetch
-    # before making any request, including redirects, to avoid arbitrary outbound URLs.
-    try:
-        url = urlsplit(client_id)
-    except ValueError:
-        return False
-
-    return (
-        url.scheme == "https"
-        and url.netloc == "claude.ai"
-        and bool(url.path)
-        and not url.query
-        and not url.fragment
-    )
 
 
 async def _download(http: httpx2.AsyncClient, url: str) -> bytes | None:

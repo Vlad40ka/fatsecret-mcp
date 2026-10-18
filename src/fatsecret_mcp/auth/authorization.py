@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
-from fatsecret_mcp.auth.client_metadata import fetch_client
+from fatsecret_mcp.auth.client_metadata import CLAUDE_CALLBACKS, fetch_client
 from fatsecret_mcp.auth.login_page import login_page
 from fatsecret_mcp.auth.models import AuthorizationDetails, ConnectorIdentity, LoginRequest
 from fatsecret_mcp.auth.responses import oauth_error
@@ -41,7 +41,7 @@ async def start_authorization(
     client = await fetch_client(http, params.client_id)
     redirect_uri = request.query_params.get("redirect_uri", "")
 
-    if client is None or not _is_allowed_callback(client, params, redirect_uri):
+    if client is None or not _is_allowed_callback(client, redirect_uri):
         return oauth_error("invalid_request")
 
     scopes = _requested_scopes(params)
@@ -75,22 +75,11 @@ def _refused_pkce_or_resource(
     return None
 
 
-def _is_allowed_callback(
-    client: OAuthClientInformationFull, params: AuthorizationRequest, redirect_uri: str
-) -> bool:
-    """An HTTPS callback without credentials or fragment, listed in the client's metadata."""
+def _is_allowed_callback(client: OAuthClientInformationFull, redirect_uri: str) -> bool:
+    """One of Claude's own callbacks, also listed in the client's metadata."""
     registered = [str(uri) for uri in client.redirect_uris or []]
-    redirect = params.redirect_uri
 
-    if redirect_uri not in registered or redirect is None:
-        return False
-
-    return (
-        redirect.scheme == "https"
-        and not redirect.username
-        and not redirect.password
-        and not redirect.fragment
-    )
+    return redirect_uri in CLAUDE_CALLBACKS and redirect_uri in registered
 
 
 def _requested_scopes(params: AuthorizationRequest) -> tuple[str, ...]:

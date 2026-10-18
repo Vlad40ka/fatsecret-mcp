@@ -30,7 +30,7 @@ pytestmark = pytest.mark.anyio
 
 BASE_URL = "https://diary.example.com"
 RESOURCE = BASE_URL + "/mcp"
-CLIENT_ID = "https://claude.ai/api/oauth/mcp-oauth-client-metadata"
+CLIENT_ID = "https://claude.ai/oauth/mcp-oauth-client-metadata"
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 PASSWORD = "correct-horse-battery"
 PASSWORD_HASH = (
@@ -71,6 +71,11 @@ def client_metadata() -> dict[str, object]:
 
 
 @pytest.fixture
+def metadata_requests() -> list[str]:
+    return []
+
+
+@pytest.fixture
 def password_checks(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     scrypt = hashlib.scrypt
     checks: list[bytes] = []
@@ -99,8 +104,9 @@ async def http(
     fatsecret: FakeFatSecret,
     clock: FakeClock,
     client_metadata: dict[str, object],
+    metadata_requests: list[str],
 ) -> AsyncIterator[httpx2.AsyncClient]:
-    async with serve(remote_household, fatsecret, clock, client_metadata) as client:
+    async with serve(remote_household, fatsecret, clock, client_metadata, metadata_requests) as client:
         yield client
 
 
@@ -110,14 +116,16 @@ async def serve(
     fatsecret: FakeFatSecret,
     clock: FakeClock,
     client_metadata: dict[str, object],
+    metadata_requests: list[str] | None = None,
 ) -> AsyncGenerator[httpx2.AsyncClient]:
     """Start the connector app for a Household, as a deploy with that configuration would."""
     base_url = household.public_base_url
+    fetched_urls = metadata_requests if metadata_requests is not None else []
 
     assert base_url is not None
 
     def metadata_response(request: httpx2.Request) -> httpx2.Response:
-        assert str(request.url) == CLIENT_ID
+        fetched_urls.append(str(request.url))
 
         return httpx2.Response(
             status_code=200,
@@ -550,6 +558,102 @@ async def test_the_published_client_identity_and_redirects_are_required(
     )
 
     assert response.status_code == 400
+
+
+async def test_a_foreign_claude_ai_client_cannot_send_the_code_to_its_own_callback(
+    http: httpx2.AsyncClient, client_metadata: dict[str, object], metadata_requests: list[str]
+) -> None:
+    foreign_client = "https://claude.ai/uploads/attacker-metadata.json"
+    attacker_callback = "https://attacker.example.com/callback"
+
+    client_metadata.update(client_id=foreign_client, redirect_uris=[attacker_callback])
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": foreign_client,
+            "redirect_uri": attacker_callback,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert "set-cookie" not in response.headers
+    assert metadata_requests == []
+
+
+@pytest.mark.parametrize(
+    "client_id",
+    [
+        "https://claude.ai/another-client",
+        CLIENT_ID + "?x=1",
+        "https://claude.ai/api/oauth/mcp-oauth-client-metadata",
+    ],
+)
+async def test_any_other_claude_ai_client_is_refused_without_fetching_it(
+    http: httpx2.AsyncClient, metadata_requests: list[str], client_id: str
+) -> None:
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": CALLBACK,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert metadata_requests == []
+
+
+async def test_a_callback_listed_in_the_metadata_must_also_be_claudes(
+    http: httpx2.AsyncClient, client_metadata: dict[str, object]
+) -> None:
+    attacker_callback = "https://attacker.example.com/callback"
+
+    client_metadata["redirect_uris"] = [CALLBACK, attacker_callback]
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "redirect_uri": attacker_callback,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert "set-cookie" not in response.headers
+
+
+async def test_the_sign_in_page_names_the_host_that_receives_the_code(
+    http: httpx2.AsyncClient, metadata_requests: list[str]
+) -> None:
+    response = await http.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "redirect_uri": CALLBACK,
+            "code_challenge": CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": RESOURCE,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "your browser returns to <strong>claude.ai</strong>" in visible_page(response)
+    assert metadata_requests == [CLIENT_ID]
 
 
 async def test_the_login_form_requires_its_original_browser_cookie(http: httpx2.AsyncClient) -> None:
