@@ -224,3 +224,21 @@ async def test_search_reads_only_the_catalog_never_the_food_diary(
     assert not result.is_error
     # One catalog search and its one Food.
     assert fatsecret.requests == 1 + 1
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"description": "x" * 201},
+        {"description": "pierś z kurczaka", "english_rendering": "x" * 201},
+    ],
+)
+async def test_overlong_searches_are_refused_before_any_fatsecret_request(
+    connect: Connect, fatsecret: FakeFatSecret, arguments: dict[str, str]
+) -> None:
+    async with connect("jakub") as client:
+        result = await client.call_tool("search_foods", arguments)
+
+    assert result.is_error
+    assert "at most 200 characters" in str(result.content)
+    assert fatsecret.requests == 0

@@ -463,3 +463,73 @@ async def test_the_same_utc_instant_uses_each_users_timezone_for_meal_and_diary_
     assert proposed["meal"] == meal
     assert proposed["previous_day_suggested"] is previous_day
     assert proposed["expires_at"] == "2026-10-14T22:30:00Z"
+
+
+async def test_six_hundred_items_are_refused_before_any_fatsecret_request(
+    connect: Connect, fatsecret: FakeFatSecret, rice: Food
+) -> None:
+    items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}] * 600
+
+    async with connect("jakub") as client:
+        result = await client.call_tool("draft_entries", {"items": items})
+
+    assert result.is_error
+    assert "at most 20 items" in str(result.content)
+    assert fatsecret.requests == 0
+
+
+async def test_a_large_meal_of_twenty_items_fits_one_draft(connect: Connect, rice: Food) -> None:
+    items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 50}] * 20
+
+    async with connect("jakub") as client:
+        result = await draft(client, items)
+
+    assert len(result["items"]) == 20
+
+
+async def test_the_draft_tool_tells_claude_to_split_a_larger_meal(connect: Connect) -> None:
+    async with connect("jakub") as client:
+        listed = (await client.list_tools()).tools
+
+    tool = next(tool for tool in listed if tool.name == "draft_entries")
+    items = tool.input_schema["properties"]["items"]
+
+    assert items["maxItems"] == 20
+    assert "several Drafts" in items["description"]
+    assert "split a larger meal into several Drafts" in (tool.description or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("food_id", "1" * 21),
+        ("serving_id", "1" * 21),
+        ("assumption", "x" * 301),
+    ],
+)
+async def test_overlong_food_item_text_is_refused_before_any_fatsecret_request(
+    connect: Connect, fatsecret: FakeFatSecret, rice: Food, field: str, value: str
+) -> None:
+    item: dict[str, Any] = {"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}
+
+    item[field] = value
+
+    async with connect("jakub") as client:
+        result = await client.call_tool("draft_entries", {"items": [item]})
+
+    assert result.is_error
+    assert "at most" in str(result.content)
+    assert fatsecret.requests == 0
+
+
+async def test_a_draft_too_long_to_confirm_is_refused_with_a_request_to_split_it(
+    connect: Connect, fatsecret: FakeFatSecret, rice: Food
+) -> None:
+    fatsecret.add_food(replace(rice, name="Ryż " + "ż" * 2000))
+    items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 50}] * 20
+
+    async with connect("jakub") as client:
+        result = await client.call_tool("draft_entries", {"items": items})
+
+    assert result.is_error
+    assert "several Drafts" in str(result.content)

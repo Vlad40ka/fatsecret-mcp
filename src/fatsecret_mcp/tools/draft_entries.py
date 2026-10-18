@@ -23,6 +23,7 @@ from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.errors import FatSecretError, NotFound
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from fatsecret_mcp.tools.schemas import (
+    MAX_DRAFT_ID_LENGTH,
     Amounts,
     DayAfter,
     DiaryDayOrToday,
@@ -67,6 +68,8 @@ def register(
         label values, the logged values and the difference. If the User dislikes the Stand-in,
         draft again with a different search_phrase.
 
+        A Draft holds at most 20 items: split a larger meal into several Drafts.
+
         Include assumptions about estimated amounts. Always ask the User whether the suggested Meal
         is correct. If previous_day_suggested is true, ask whether to use Snacks on the
         previous Diary Day instead. A correction needs a new Draft with the explicit Meal or Diary Day.
@@ -102,9 +105,15 @@ def register(
             diary_day=day,
             expires_at=now.astimezone(UTC) + timedelta(minutes=30),
         )
+        draft_id = seal_draft(sealed, signing_key.get_secret_value())
+
+        # confirm_draft would refuse a longer id, so the User couldn't confirm this Draft.
+        if len(draft_id) > MAX_DRAFT_ID_LENGTH:
+            raise ToolError("These Food names are too long for one Draft. Split it into several Drafts.")
+
         proposed_entries = [ProposedEntry.of(item) for item in prepared]
         result = FoodDraft(
-            draft_id=seal_draft(sealed, signing_key.get_secret_value()),
+            draft_id=draft_id,
             expires_at=sealed.expires_at,
             meal=selected_meal,
             meal_suggested=meal is None,

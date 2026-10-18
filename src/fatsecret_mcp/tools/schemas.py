@@ -33,6 +33,17 @@ ATTRIBUTION = "Powered by fatsecret Platform API"
 
 # --- Inputs ----------------------------------------------------------------
 
+# Lists and text are bounded, so one tool call makes a bounded number of FatSecret requests.
+MAX_DRAFT_ITEMS = 20
+# A search description or its English rendering.
+MAX_SEARCH_LENGTH = 200
+# A product name or a Stand-in's search phrase.
+MAX_NAME_LENGTH = 100
+MAX_ASSUMPTION_LENGTH = 300
+MAX_ID_LENGTH = 20
+# Room for twenty items with long, non-ASCII catalog names, sealed and Base64-encoded.
+MAX_DRAFT_ID_LENGTH = 32768
+
 DiaryDayOrToday = Annotated[
     date | None,
     Field(description="The Diary Day, as YYYY-MM-DD. Omit for today in the User's timezone."),
@@ -41,24 +52,37 @@ DiaryDayOrToday = Annotated[
 PeriodStart = Annotated[date, Field(description="First Diary Day in the period, inclusive, as YYYY-MM-DD.")]
 PeriodEnd = Annotated[date, Field(description="Last Diary Day in the period, inclusive, as YYYY-MM-DD.")]
 
-FoodDescription = Annotated[str, Field(min_length=1, description="The description as the User said it.")]
+FoodDescription = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_SEARCH_LENGTH,
+        description="The description of one food as the User said it.",
+    ),
+]
 EnglishRendering = Annotated[
     str | None,
-    Field(min_length=1, description="English rendering for the catalog. Pass this for non-English input."),
+    Field(
+        min_length=1,
+        max_length=MAX_SEARCH_LENGTH,
+        description="English rendering for the catalog. Pass this for non-English input.",
+    ),
 ]
+CatalogId = Annotated[str, Field(min_length=1, max_length=MAX_ID_LENGTH)]
+Assumption = Annotated[str | None, Field(max_length=MAX_ASSUMPTION_LENGTH)]
 
 
 class FoodDraftInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    food_id: str = Field(min_length=1)
-    serving_id: str = Field(min_length=1)
+    food_id: CatalogId
+    serving_id: CatalogId
     number_of_units: float = Field(
         gt=0,
         le=10000,
         allow_inf_nan=False,
     )
-    assumption: str | None = None
+    assumption: Assumption = None
 
 
 class NutritionLabelValues(BaseModel):
@@ -88,7 +112,11 @@ class NutritionLabelDraftInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    product_name: str = Field(min_length=1, description="The product's name, given to its Food Entry.")
+    product_name: str = Field(
+        min_length=1,
+        max_length=MAX_NAME_LENGTH,
+        description="The product's name, given to its Food Entry.",
+    )
     nutrition_label: NutritionLabelValues
     grams: float = Field(
         gt=0,
@@ -98,9 +126,10 @@ class NutritionLabelDraftInput(BaseModel):
     )
     search_phrase: str = Field(
         min_length=1,
+        max_length=MAX_NAME_LENGTH,
         description='English catalog search for a similar generic Food, e.g. "protein bar".',
     )
-    assumption: str | None = None
+    assumption: Assumption = None
 
 
 # Fields only a Nutrition Label item has, so one missing its label is still told what it lacks.
@@ -126,9 +155,23 @@ DraftItemInput = Annotated[
     Discriminator(_draft_item_kind),
 ]
 
-DraftItems = Annotated[list[DraftItemInput], Field(min_length=1)]
+DraftItems = Annotated[
+    list[DraftItemInput],
+    Field(
+        min_length=1,
+        max_length=MAX_DRAFT_ITEMS,
+        description=f"At most {MAX_DRAFT_ITEMS} items. Split a larger meal into several Drafts.",
+    ),
+]
 
-DraftId = Annotated[str, Field(min_length=1, description="The draft_id returned by draft_entries.")]
+DraftId = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_DRAFT_ID_LENGTH,
+        description="The draft_id returned by draft_entries.",
+    ),
+]
 
 
 # --- Results ---------------------------------------------------------------

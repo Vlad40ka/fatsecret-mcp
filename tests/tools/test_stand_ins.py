@@ -417,3 +417,37 @@ async def test_a_nutrition_label_item_without_its_label_says_the_label_is_missin
     assert result.is_error
     assert "nutrition_label" in str(result.content)
     assert "food_id" not in str(result.content)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("product_name", "x" * 101),
+        ("search_phrase", "x" * 101),
+        ("assumption", "x" * 301),
+    ],
+)
+async def test_overlong_nutrition_label_text_is_refused_before_any_fatsecret_request(
+    connect: Connect, fatsecret: FakeFatSecret, protein_bars: list[Food], field: str, value: str
+) -> None:
+    item = dzik_bar()
+
+    item[field] = value
+
+    async with connect("jakub") as client:
+        result = await client.call_tool("draft_entries", {"items": [item]})
+
+    assert result.is_error
+    assert "at most" in str(result.content)
+    assert fatsecret.requests == 0
+
+
+async def test_a_product_name_and_search_phrase_of_a_hundred_characters_are_accepted(
+    connect: Connect, protein_bars: list[Food]
+) -> None:
+    product_name = "Baton proteinowy DZIK " + "x" * 78
+
+    async with connect("jakub") as client:
+        result = await draft(client, [dzik_bar(product_name=product_name)])
+
+    assert result["items"][0]["name"] == product_name

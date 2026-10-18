@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -335,3 +336,29 @@ async def test_the_confirm_tool_is_destructive_idempotent_and_asks_for_explicit_
     assert tool.annotations.idempotent_hint is True
     assert tool.output_schema is not None
     assert "explicitly approved" in (tool.description or "")
+
+
+async def test_an_overlong_draft_id_is_refused_before_any_fatsecret_request(
+    connect: Connect, fatsecret: FakeFatSecret
+) -> None:
+    async with connect("jakub") as client:
+        result = await client.call_tool("confirm_draft", {"draft_id": "x" * 32769})
+
+    assert result.is_error
+    assert "at most" in str(result.content)
+    assert fatsecret.requests == 0
+
+
+async def test_a_draft_of_twenty_long_named_foods_can_be_confirmed(
+    connect: Connect, fatsecret: FakeFatSecret, rice: Food
+) -> None:
+    long_named = replace(rice, name="Ryż gotowany z warzywami i przyprawami, " + "ż" * 200)
+
+    fatsecret.add_food(long_named)
+
+    async with connect("jakub") as client:
+        draft_id = await draft(client, [RICE_50_G] * 20)
+        confirmed = await confirm(client, draft_id)
+
+    assert confirmed["status"] == "confirmed"
+    assert len(confirmed["entries"]) == 20
