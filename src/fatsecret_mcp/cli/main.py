@@ -53,29 +53,25 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _add_user(environ: Mapping[str, str]) -> None:
-    import httpx2
-
     from fatsecret_mcp.cli.add_user import add_user
     from fatsecret_mcp.cli.console import Terminal
-    from fatsecret_mcp.fatsecret.client import FatSecretApi
+    from fatsecret_mcp.fatsecret.client import connected_api
 
     consumer = load_consumer_key(environ)
 
-    async with httpx2.AsyncClient(timeout=20) as http:
-        await add_user(Terminal(), FatSecretApi(consumer, http), existing_users=environ.get(USERS_VAR))
+    async with connected_api(consumer) as fatsecret:
+        await add_user(Terminal(), fatsecret, existing_users=environ.get(USERS_VAR))
 
 
 async def _check(environ: Mapping[str, str]) -> bool:
-    import httpx2
-
     from fatsecret_mcp.cli.check import check
     from fatsecret_mcp.cli.console import Terminal
-    from fatsecret_mcp.fatsecret.client import FatSecretApi
+    from fatsecret_mcp.fatsecret.client import connected_api
 
     consumer = load_consumer_key(environ)
 
-    async with httpx2.AsyncClient(timeout=20) as http:
-        return await check(Terminal(), environ, FatSecretApi(consumer, http))
+    async with connected_api(consumer) as fatsecret:
+        return await check(Terminal(), environ, fatsecret)
 
 
 async def _serve(environ: Mapping[str, str], arguments: argparse.Namespace) -> None:

@@ -17,7 +17,12 @@ from fatsecret_mcp.tools.schemas import DiaryDay, DiaryDayOrToday, as_tool_resul
 
 
 def register(server: MCPServer, user: User, diary: UserDiary, clock: Clock) -> None:
-    @server.tool(annotations=ToolAnnotations(title="Get Diary Day", read_only_hint=True))
+    annotations = ToolAnnotations(
+        title="Get Diary Day",
+        read_only_hint=True,
+    )
+
+    @server.tool(annotations=annotations)
     async def get_diary_day(
         diary_day: DiaryDayOrToday = None, refresh: bool = False
     ) -> Annotated[CallToolResult, DiaryDay]:

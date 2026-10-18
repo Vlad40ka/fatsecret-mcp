@@ -21,8 +21,8 @@ CUSTOM_AMOUNT = ":custom:"
 STRAY_PLURAL = re.compile(r"^(\d+)s\s+")
 LEADING_FRACTION = re.compile(r"^(?:(?P<whole>\d+) )?(?P<numerator>\d+)/(?P<denominator>\d+)\b")
 
-MEALS = {"breakfast": Meal.BREAKFAST, "lunch": Meal.LUNCH, "dinner": Meal.DINNER, "other": Meal.SNACKS}
 MEAL_NAMES = {Meal.BREAKFAST: "breakfast", Meal.LUNCH: "lunch", Meal.DINNER: "dinner", Meal.SNACKS: "other"}
+MEALS = {name: meal for meal, name in MEAL_NAMES.items()}
 
 
 def day_number(day: date) -> int:
@@ -116,12 +116,17 @@ def _serving(raw: dict[str, Any]) -> Serving:
         metric_amount=metric_amount,
         metric_unit=_optional_text(raw, "metric_serving_unit"),
         number_of_units=_number(raw, "number_of_units"),
-        nutrition=Nutrition(
-            kcal=_number(raw, "calories", default=0),
-            protein=_number(raw, "protein", default=0),
-            fat=_number(raw, "fat", default=0),
-            carbohydrate=_number(raw, "carbohydrate", default=0),
-        ),
+        nutrition=_nutrition(raw),
+    )
+
+
+def _nutrition(raw: dict[str, Any]) -> Nutrition:
+    """kcal and Macros as FatSecret names them in Servings, Food Entries and month totals."""
+    return Nutrition(
+        kcal=_number(raw, "calories", default=0),
+        protein=_number(raw, "protein", default=0),
+        fat=_number(raw, "fat", default=0),
+        carbohydrate=_number(raw, "carbohydrate", default=0),
     )
 
 
@@ -144,12 +149,7 @@ def month_totals(body: dict[str, Any]) -> dict[date, Nutrition]:
         except (ValueError, OverflowError):
             raise UpstreamFailure("an invalid Diary Day") from None
 
-        totals[day] = Nutrition(
-            kcal=_number(raw, "calories", default=0),
-            protein=_number(raw, "protein", default=0),
-            fat=_number(raw, "fat", default=0),
-            carbohydrate=_number(raw, "carbohydrate", default=0),
-        )
+        totals[day] = _nutrition(raw)
 
     return totals
 
@@ -166,12 +166,7 @@ def _food_entry(raw: dict[str, Any]) -> FoodEntry:
         number_of_units=_number(raw, "number_of_units"),
         meal=_meal(_text(raw, "meal")),
         diary_day=EPOCH + timedelta(days=int(_number(raw, "date_int"))),
-        nutrition=Nutrition(
-            kcal=_number(raw, "calories", default=0),
-            protein=_number(raw, "protein", default=0),
-            fat=_number(raw, "fat", default=0),
-            carbohydrate=_number(raw, "carbohydrate", default=0),
-        ),
+        nutrition=_nutrition(raw),
     )
 
 

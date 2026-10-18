@@ -23,7 +23,7 @@ from pydantic import AnyHttpUrl, SecretStr, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 
 from fatsecret_mcp.auth.passwords import valid_password_hash
-from fatsecret_mcp.config.models import Household, User
+from fatsecret_mcp.config.models import Household, MealHours, User
 from fatsecret_mcp.fatsecret.gateway import ConsumerKey
 
 CONSUMER_KEY_VAR = "FATSECRET_CONSUMER_KEY"
@@ -72,7 +72,8 @@ def parse_users(value: str) -> list[User]:
     try:
         users = _USERS.validate_json(value)
     except ValidationError as error:
-        problems = "; ".join(_describe(details) for details in error.errors(include_input=False))
+        described = [_describe(details) for details in error.errors(include_input=False)]
+        problems = "; ".join(described)
 
         raise HouseholdConfigError(f"Invalid Household configuration: {problems}") from None
 
@@ -144,8 +145,10 @@ def _public_base_url(environ: Mapping[str, str]) -> str | None:
         raise HouseholdConfigError(f"{BASE_URL_VAR} must be a public HTTPS origin") from None
 
     insecure = url.scheme != "https" and url.host not in ("localhost", "127.0.0.1", "[::1]")
+    has_credentials = bool(url.username or url.password)
+    beyond_origin = bool(url.query or url.fragment) or url.path not in (None, "/")
 
-    if insecure or url.username or url.password or url.query or url.fragment or url.path not in (None, "/"):
+    if insecure or has_credentials or beyond_origin:
         raise HouseholdConfigError(
             f"{BASE_URL_VAR} must be an HTTPS origin without credentials, path or query"
         )
@@ -154,21 +157,29 @@ def _public_base_url(environ: Mapping[str, str]) -> str | None:
 
 
 def _repeated_ids(users: list[User]) -> list[str]:
-    counts = Counter(user.id for user in users)
+    ids = [user.id for user in users]
+    counts = Counter(ids)
+    repeated = [user_id for user_id, count in counts.items() if count > 1]
 
-    return sorted(user_id for user_id, count in counts.items() if count > 1)
+    return sorted(repeated)
+
+
+def meal_starts_differ(meal_hours: MealHours) -> bool:
+    """Whether every Meal starts at its own time, so each Meal lasts until the next one starts."""
+    starts = list(meal_hours.as_starts().values())
+
+    return len(set(starts)) == len(starts)
 
 
 def _validate_meal_hours(users: list[User]) -> None:
     for index, user in enumerate(users):
-        starts = list(user.meal_hours.as_starts().values())
-
-        if len(set(starts)) != len(starts):
+        if not meal_starts_differ(user.meal_hours):
             raise HouseholdConfigError(f"{USERS_VAR}[{index}].meal_hours: Meal start times must differ")
 
 
 def _describe(details: ErrorDetails) -> str:
-    path = "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in details["loc"])
+    parts = [f"[{part}]" if isinstance(part, int) else f".{part}" for part in details["loc"]]
+    path = "".join(parts)
 
     return f"{USERS_VAR}{path}: {details['msg']}"
 

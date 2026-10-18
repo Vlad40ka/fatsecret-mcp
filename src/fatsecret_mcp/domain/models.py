@@ -74,14 +74,6 @@ class CatalogFood:
 
 
 @dataclass(frozen=True)
-class MetricAmount:
-    """An amount in grams ("g") or millilitres ("ml")."""
-
-    amount: float
-    unit: str
-
-
-@dataclass(frozen=True)
 class Serving:
     id: str
     description: str
@@ -143,6 +135,16 @@ class Draft:
     meal: Meal
     diary_day: date
     expires_at: datetime
+
+
+@dataclass(frozen=True)
+class DraftTotals:
+    """A Draft's Food Entries added up, and the Diary Day once they're added."""
+
+    added: Nutrition
+    consumed: Nutrition
+    daily_targets: Nutrition
+    remaining: Nutrition
 
 
 @dataclass(frozen=True)

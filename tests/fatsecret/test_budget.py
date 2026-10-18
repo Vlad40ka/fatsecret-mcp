@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import httpx2
 import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.fatsecret.budget import FATSECRET_DAILY_QUOTA, daily_budget
+from fatsecret_mcp.fatsecret.client import FatSecretApi
+from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
-from tests.conftest import FakeClock
+from tests.conftest import FakeClock, FakeRequestClock
 from tests.fatsecret.fake import FakeFatSecret
+from tests.fatsecret.recorded import fixture
 
 pytestmark = pytest.mark.anyio
 
@@ -74,3 +78,41 @@ def test_the_whole_household_fits_under_fatsecrets_daily_quota(users: int) -> No
 
 def test_two_users_get_over_two_thousand_requests_a_day_each() -> None:
     assert daily_budget(2) == 2250
+
+
+async def test_requests_the_server_refuses_itself_during_a_cooldown_cost_no_budget(
+    household: Household, clock: FakeClock, request_clock: FakeRequestClock, request_limits: RequestLimits
+) -> None:
+    sent = 0
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        nonlocal sent
+        sent += 1
+
+        if sent == 1:
+            return httpx2.Response(200, json={"error": {"code": 12}})
+
+        return httpx2.Response(200, json=fixture("foods_search_empty.json")["response"]["json"])
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+        gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=clock,
+            signing_key=household.signing_key,
+            daily_requests=2,
+        )
+
+        async with Client(server) as jakub:
+            throttled = await jakub.call_tool("search_foods", {"description": "rice"})
+
+            for _ in range(5):
+                assert (await jakub.call_tool("search_foods", {"description": "rice"})).is_error
+
+            request_clock.elapsed = 30.0
+            recovered = await jakub.call_tool("search_foods", {"description": "rice"})
+
+    assert throttled.is_error
+    assert not recovered.is_error
+    assert sent == 2

@@ -16,7 +16,12 @@ from fatsecret_mcp.tools.schemas import PeriodDay, PeriodEnd, PeriodStart, Perio
 
 
 def register(server: MCPServer, user: User, diary: UserDiary) -> None:
-    @server.tool(annotations=ToolAnnotations(title="Get Period Summary", read_only_hint=True))
+    annotations = ToolAnnotations(
+        title="Get Period Summary",
+        read_only_hint=True,
+    )
+
+    @server.tool(annotations=annotations)
     async def get_period_summary(
         from_day: PeriodStart, to_day: PeriodEnd, refresh: bool = False
     ) -> Annotated[CallToolResult, PeriodSummary]:

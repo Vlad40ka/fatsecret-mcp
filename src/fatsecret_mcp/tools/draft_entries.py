@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, timedelta
 from typing import Annotated
 
 from mcp.server import MCPServer
@@ -11,12 +10,18 @@ from mcp_types import CallToolResult, ToolAnnotations
 from pydantic import SecretStr
 
 from fatsecret_mcp.config.models import User
-from fatsecret_mcp.domain.day_summary import total_nutrition
-from fatsecret_mcp.domain.diary_day import Clock
+from fatsecret_mcp.domain.diary_day import Clock, today
 from fatsecret_mcp.domain.draft_token import seal_draft
-from fatsecret_mcp.domain.drafts import InvalidDraftItem, draft_item
+from fatsecret_mcp.domain.drafts import (
+    InvalidDraftItem,
+    UnlikelyDiaryDay,
+    check_diary_day,
+    draft_expiry,
+    draft_item,
+    draft_totals,
+)
 from fatsecret_mcp.domain.meal_suggestion import ask_about_previous_day, suggest_meal
-from fatsecret_mcp.domain.models import Draft, DraftItem, Meal, Nutrition, Serving
+from fatsecret_mcp.domain.models import Draft, DraftItem, Meal, Serving
 from fatsecret_mcp.domain.stand_ins import check_label, stand_in_item
 from fatsecret_mcp.fatsecret.catalog import loggable_foods
 from fatsecret_mcp.fatsecret.diary import UserDiary
@@ -76,8 +81,8 @@ def register(
         Nothing is written by this tool; a Draft expires after thirty minutes.
         """
         now = clock()
-        local = now.astimezone(user.timezone)
-        day = diary_day or local.date()
+        user_today = today(now, user.timezone)
+        day = diary_day or user_today
         selected_meal = meal or suggest_meal(now, user.timezone, user.meal_hours.as_starts())
         previous_day_suggested = (
             meal is None and diary_day is None and ask_about_previous_day(now, user.timezone)
@@ -85,17 +90,16 @@ def register(
         prepared: list[DraftItem] = []
 
         try:
+            check_diary_day(day, user_today)
+
             for item in items:
                 prepared.append(await _prepared_item(item, fatsecret))
 
             entries = await diary.entries(day)
-        except (FatSecretError, InvalidDraftItem) as error:
+        except (FatSecretError, InvalidDraftItem, UnlikelyDiaryDay) as error:
             raise ToolError(str(error)) from error
 
-        nutrition = [item.nutrition for item in prepared]
-        totals = sum(nutrition, Nutrition())
-        consumed = total_nutrition(entries) + totals
-        targets = user.daily_targets.as_nutrition()
+        totals = draft_totals(entries, prepared, user.daily_targets.as_nutrition())
         draft_entries_to_seal = [item.entry for item in prepared]
         sealed_items = tuple(draft_entries_to_seal)
         sealed = Draft(
@@ -103,7 +107,7 @@ def register(
             items=sealed_items,
             meal=selected_meal,
             diary_day=day,
-            expires_at=now.astimezone(UTC) + timedelta(minutes=30),
+            expires_at=draft_expiry(now),
         )
         draft_id = seal_draft(sealed, signing_key.get_secret_value())
 
@@ -120,12 +124,8 @@ def register(
             diary_day=day,
             previous_day_suggested=previous_day_suggested,
             items=proposed_entries,
-            totals=Amounts.of(totals),
-            day_after=DayAfter(
-                consumed=Amounts.of(consumed),
-                daily_targets=Amounts.of(targets),
-                remaining=Amounts.of(targets - consumed),
-            ),
+            totals=Amounts.of(totals.added),
+            day_after=DayAfter.of(totals),
         )
 
         return as_tool_result(result)

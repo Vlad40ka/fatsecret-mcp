@@ -16,7 +16,7 @@ from pydantic import BeforeValidator, Field, TypeAdapter, ValidationError
 
 from fatsecret_mcp.auth.passwords import generate_password, hash_password
 from fatsecret_mcp.cli.console import Console
-from fatsecret_mcp.config.loader import USERS_VAR
+from fatsecret_mcp.config.loader import USERS_VAR, meal_starts_differ
 from fatsecret_mcp.config.models import DEFAULT_TIMEZONE, DisplayName, MealHours, MealStart, Timezone, UserId
 from fatsecret_mcp.config.writer import existing_user_ids, users_value_with
 from fatsecret_mcp.fatsecret.gateway import AccessToken, FatSecretGateway
@@ -189,9 +189,7 @@ def _ask_meal_hours(console: Console) -> dict[str, str] | None:
             dinner=_ask(console, "  Dinner", _MEAL_START, hint=hint, default=defaults.dinner),
             snacks=_ask(console, "  Snacks", _MEAL_START, hint=hint, default=defaults.snacks),
         )
-        starts = list(meal_hours.as_starts().values())
-
-        if len(set(starts)) == len(starts):
+        if meal_starts_differ(meal_hours):
             return meal_hours.model_dump()
 
         console.tell("  Meal start times must differ. Type them again.")

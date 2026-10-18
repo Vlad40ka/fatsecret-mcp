@@ -9,13 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from fatsecret_mcp.config.models import Household
 
 
-class ConnectorIdentity(BaseModel):
-    """Where this Household's connector lives, and the key that signs its credentials."""
+class FrozenModel(BaseModel):
+    """Immutable, and refuses fields it doesn't declare."""
 
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
     )
+
+
+class ConnectorIdentity(FrozenModel):
+    """Where this Household's connector lives, and the key that signs its credentials."""
 
     base_url: str
     resource: str
@@ -36,32 +40,17 @@ class ConnectorIdentity(BaseModel):
         )
 
 
-class SignedValue(BaseModel):
-    model_config = ConfigDict(
-        frozen=True,
-        extra="forbid",
-    )
-
+class SignedValue(FrozenModel):
     expires_at: float
 
 
-class FetchLimited(BaseModel):
+class FetchLimited(FrozenModel):
     """Claude's client metadata may not be fetched again for `retry_after` seconds."""
-
-    model_config = ConfigDict(
-        frozen=True,
-        extra="forbid",
-    )
 
     retry_after: int
 
 
-class AuthorizationDetails(BaseModel):
-    model_config = ConfigDict(
-        frozen=True,
-        extra="forbid",
-    )
-
+class AuthorizationDetails(FrozenModel):
     client_id: str
     redirect_uri: str
     code_challenge: str

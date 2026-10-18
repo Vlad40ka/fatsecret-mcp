@@ -9,7 +9,8 @@ The PIN flow (3-legged OAuth 1.0 with `oob`) has its own endpoints, which answer
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any, cast
 from urllib.parse import quote
@@ -33,6 +34,16 @@ logger = logging.getLogger(__name__)
 # httpx2 logs every request URL at INFO, and these URLs carry the OAuth token and signature.
 logging.getLogger("httpx2").setLevel(logging.WARNING)
 logging.getLogger("httpcore2").setLevel(logging.WARNING)
+
+
+@asynccontextmanager
+async def connected_api(consumer: ConsumerKey) -> AsyncGenerator[FatSecretApi]:
+    """The real gateway with an HTTP client of its own, closed when the block ends."""
+    async with httpx2.AsyncClient(timeout=20) as http:
+        yield FatSecretApi(
+            consumer=consumer,
+            http=http,
+        )
 
 
 class FatSecretApi:
@@ -131,9 +142,10 @@ class FatSecretApi:
         try:
             async with self._request_limits.request():
                 # Sign after any pacing wait so OAuth timestamps are fresh when the request is sent.
-                url = signed_url(
-                    http_method, API_URL, {"method": method, "format": "json", **params}, self._consumer, user
-                )
+                call = {"method": method, "format": "json"}
+                call.update(params)
+
+                url = signed_url(http_method, API_URL, call, self._consumer, user)
                 body = _json_object(await self._send(http_method, url))
 
                 if "error" in body:

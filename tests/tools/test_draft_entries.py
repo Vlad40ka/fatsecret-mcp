@@ -536,3 +536,29 @@ async def test_a_draft_too_long_to_confirm_is_refused_with_a_request_to_split_it
 
     assert result.is_error
     assert "several Drafts" in str(result.content)
+
+
+@pytest.mark.parametrize("diary_day", ["2025-10-13", "2026-10-22", "0001-01-01", "9999-12-31"])
+async def test_a_diary_day_over_a_year_back_or_over_a_week_ahead_is_refused_before_any_request(
+    connect: Connect, fatsecret: FakeFatSecret, rice: Food, diary_day: str
+) -> None:
+    items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}]
+
+    async with connect("jakub") as client:
+        result = await client.call_tool("draft_entries", {"items": items, "diary_day": diary_day})
+
+    assert result.is_error
+    assert "a year back" in str(result.content)
+    assert fatsecret.requests == 0
+
+
+@pytest.mark.parametrize("diary_day", ["2025-10-14", "2026-10-21"])
+async def test_a_diary_day_a_year_back_or_a_week_ahead_can_be_drafted(
+    connect: Connect, rice: Food, diary_day: str
+) -> None:
+    items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}]
+
+    async with connect("jakub") as client:
+        result = await draft(client, items, meal="lunch", diary_day=diary_day)
+
+    assert result["diary_day"] == diary_day

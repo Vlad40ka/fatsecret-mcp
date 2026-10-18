@@ -1,4 +1,4 @@
-"""Stand-ins: a catalog Food logged in place of a product missing from the catalog (ADR-0003).
+"""Stand-ins: a catalog Food logged in place of a product missing from the catalog.
 
 The closest Food is the one whose Macros differ least once it's scaled to the label's kcal. Its
 amount is then set so that the logged kcal equal the label's kcal for the grams eaten.

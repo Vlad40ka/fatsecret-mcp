@@ -13,7 +13,7 @@ from mcp import Client
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
-from fatsecret_mcp.fatsecret.errors import FatSecretError, TooManyActions
+from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, FatSecretError, TooManyActions
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock, FakeRequestClock
@@ -136,7 +136,7 @@ async def test_error_12_stops_queued_calls_until_the_cooldown_without_extending_
     assert sent == [0.0, 30.0]
 
 
-@pytest.mark.parametrize("code", [9, 11, 20])
+@pytest.mark.parametrize("code", [9, 20])
 async def test_other_errors_are_not_retried_and_do_not_start_a_throttle_cooldown(
     request_clock: FakeRequestClock, request_limits: RequestLimits, code: int
 ) -> None:
@@ -162,6 +162,40 @@ async def test_other_errors_are_not_retried_and_do_not_start_a_throttle_cooldown
         assert await gateway.search_catalog("skyr") == []
 
     assert sent == [0.0, 1.0]
+
+
+async def test_an_exhausted_daily_quota_pauses_sending_for_ten_minutes(
+    request_clock: FakeRequestClock, request_limits: RequestLimits
+) -> None:
+    sent: list[float] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request_clock.elapsed)
+
+        if len(sent) == 1:
+            return httpx2.Response(200, json={"error": {"code": 11}})
+
+        return answer(request)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+        gateway = FatSecretApi(CONSUMER, http, request_limits=request_limits)
+
+        with pytest.raises(DailyQuotaExceeded):
+            await gateway.search_catalog("skyr")
+
+        request_clock.elapsed = 599.9
+
+        with pytest.raises(DailyQuotaExceeded) as paused:
+            await gateway.search_catalog("skyr")
+
+        assert sent == [0.0]
+        assert not paused.value.sent
+
+        request_clock.elapsed = 600.0
+
+        assert await gateway.search_catalog("skyr") == []
+
+    assert sent == [0.0, 600.0]
 
 
 async def test_cancelling_a_pacing_wait_releases_the_slot_without_sending_the_cancelled_request(

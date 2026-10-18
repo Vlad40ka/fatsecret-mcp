@@ -65,9 +65,13 @@ def register(
             if earlier is not None:
                 return as_tool_result(DraftConfirmation.of(earlier, repeated=True))
 
-            confirmation = await _write_entries(draft, user.fatsecret, fatsecret)
+            try:
+                confirmation = await _write_entries(draft, user.fatsecret, fatsecret)
+            finally:
+                # Even a failed or cancelled write may have saved an entry, so the day is read afresh.
+                with anyio.CancelScope(shield=True):
+                    await diary.invalidate(draft.diary_day)
 
-            await diary.invalidate(draft.diary_day)
             confirmed_drafts.remember(draft_id, confirmation)
 
         return as_tool_result(DraftConfirmation.of(confirmation, repeated=False))
@@ -87,7 +91,12 @@ async def _write_entries(draft: Draft, user: AccessToken, fatsecret: FatSecretGa
             except FatSecretError as error:
                 failure = error
 
-        entries.append(ConfirmedEntry(entry=entry, food_entry_id=food_entry_id))
+        confirmed = ConfirmedEntry(
+            entry=entry,
+            food_entry_id=food_entry_id,
+        )
+
+        entries.append(confirmed)
 
     if failure is not None and entries[0].food_entry_id is None:
         raise ToolError(_nothing_written(failure))

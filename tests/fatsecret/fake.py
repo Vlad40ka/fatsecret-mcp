@@ -83,8 +83,8 @@ class FakeFatSecret:
         self._diaries[user.token] = remaining
         self._deleted_days[user.token].add(day)
 
-    def fail_with(self, error: FatSecretError) -> None:
-        """Every call from now on raises `error`, as if FatSecret had answered with it."""
+    def fail_with(self, error: FatSecretError | None) -> None:
+        """Every call from now on raises `error`, as if FatSecret had answered with it; None stops it."""
         self._failure = error
 
     def limit_requests_to(self, requests: int | None) -> None:

@@ -17,7 +17,7 @@ from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.errors import InvalidAccessToken, UpstreamFailure
 from tests.conftest import FakeClock
-from tests.fatsecret.fake import FakeFatSecret
+from tests.fatsecret.fake import FakeFatSecret, food_entry
 from tests.tools.test_draft_entries import decode_base64url
 
 pytestmark = pytest.mark.anyio
@@ -208,6 +208,30 @@ async def test_a_timeout_before_any_answer_asks_to_check_the_diary_before_confir
     assert result.is_error
     assert "get_diary_day" in str(result.content)
     assert "Nothing was written" not in str(result.content)
+
+
+async def test_after_a_timeout_a_past_diary_day_shows_an_entry_fatsecret_saved_anyway(
+    connect: Connect, fatsecret: FakeFatSecret, household: Household, rice: Food
+) -> None:
+    jakub = household.user("jakub").fatsecret
+
+    async with connect("jakub") as client:
+        draft_id = await draft(client, [RICE_150_G], meal="lunch", diary_day=YESTERDAY.isoformat())
+
+        assert await diary_day(client, YESTERDAY) == []
+
+        fatsecret.fail_with(UpstreamFailure("the request timed out"))
+
+        result = await client.call_tool("confirm_draft", {"draft_id": draft_id})
+
+        # FatSecret saved the entry but its answer never arrived.
+        fatsecret.fail_with(None)
+        fatsecret.add_food_entry(jakub, food_entry("Cooked Rice", Meal.LUNCH, YESTERDAY, kcal=195))
+
+        meals = await diary_day(client, YESTERDAY)
+
+    assert result.is_error
+    assert meals[0]["food_entries"][0]["name"] == "Cooked Rice"
 
 
 async def test_a_draft_survives_a_server_restart_between_draft_and_confirm(

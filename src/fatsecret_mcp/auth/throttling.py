@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections import OrderedDict, deque
+from collections import OrderedDict
+
+from fatsecret_mcp.limits import RollingWindow
 
 ATTEMPTS_PER_NAME = 5
 WINDOW_SECONDS = 900
@@ -26,19 +28,14 @@ class SignInThrottle:
     def __init__(self) -> None:
         self.attempts: OrderedDict[str, list[float]] = OrderedDict()
         self.forms: OrderedDict[str, tuple[float, int]] = OrderedDict()
-        self.total: deque[float] = deque()
+        self.total = RollingWindow(
+            limit=ATTEMPTS_PER_MINUTE,
+            seconds=60,
+        )
 
     def admit_server(self, now: float) -> int | None:
         """At most sixty admitted submissions in any rolling minute; refusals don't extend it."""
-        while self.total and self.total[0] <= now - 60:
-            self.total.popleft()
-
-        if len(self.total) >= ATTEMPTS_PER_MINUTE:
-            return math.ceil(self.total[0] + 60 - now)
-
-        self.total.append(now)
-
-        return None
+        return self.total.retry_after(now)
 
     def admit_form(self, csrf: str, expires_at: float, now: float) -> bool:
         """Count a submission without letting a form forget its earlier submissions."""

@@ -19,6 +19,7 @@ from fatsecret_mcp.domain.models import (
     ConfirmedEntry,
     DaySummary,
     DraftItem,
+    DraftTotals,
     Food,
     FoodEntry,
     Meal,
@@ -383,6 +384,14 @@ class DayAfter(BaseModel):
     consumed: Amounts
     daily_targets: Amounts
     remaining: Amounts
+
+    @classmethod
+    def of(cls, totals: DraftTotals) -> DayAfter:
+        return cls(
+            consumed=Amounts.of(totals.consumed),
+            daily_targets=Amounts.of(totals.daily_targets),
+            remaining=Amounts.of(totals.remaining),
+        )
 
 
 class FoodDraft(BaseModel):

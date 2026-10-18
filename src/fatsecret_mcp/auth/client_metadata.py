@@ -4,15 +4,13 @@ and how rarely the server fetches it.
 
 from __future__ import annotations
 
-import math
-from collections import deque
-
 import anyio
 import httpx2
 from mcp.shared.auth import OAuthClientInformationFull
 
 from fatsecret_mcp.auth.models import FetchLimited
 from fatsecret_mcp.domain.diary_day import Clock
+from fatsecret_mcp.limits import RollingWindow
 
 # The identity and callback of Claude's web, desktop and mobile apps, pinned exactly,
 # so no other document on claude.ai can choose where a User's code is sent.
@@ -35,7 +33,10 @@ class ClaudeMetadata:
         self.clock = clock
         self.cached: OAuthClientInformationFull | None = None
         self.expires_at = 0.0
-        self.fetches: deque[float] = deque()
+        self.fetches = RollingWindow(
+            limit=FETCHES_PER_MINUTE,
+            seconds=60,
+        )
         self.lock = anyio.Lock()
 
     async def lookup(self, client_id: str) -> OAuthClientInformationFull | FetchLimited | None:
@@ -50,7 +51,7 @@ class ClaudeMetadata:
             if self.cached is not None and now < self.expires_at:
                 return self.cached
 
-            retry_after = self._admit_fetch(now)
+            retry_after = self.fetches.retry_after(now)
 
             if retry_after is not None:
                 return FetchLimited(retry_after=retry_after)
@@ -59,18 +60,6 @@ class ClaudeMetadata:
             self.expires_at = now + CLIENT_LIFETIME
 
             return self.cached
-
-    def _admit_fetch(self, now: float) -> int | None:
-        """At most ten fetches in any rolling minute; the seconds to wait once they're used up."""
-        while self.fetches and self.fetches[0] <= now - 60:
-            self.fetches.popleft()
-
-        if len(self.fetches) >= FETCHES_PER_MINUTE:
-            return math.ceil(self.fetches[0] + 60 - now)
-
-        self.fetches.append(now)
-
-        return None
 
 
 async def _fetch(http: httpx2.AsyncClient, client_id: str) -> OAuthClientInformationFull | None:

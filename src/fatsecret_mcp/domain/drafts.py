@@ -1,17 +1,57 @@
-"""Amounts and nutrition of proposed Food Entries."""
+"""Proposed Food Entries: their amounts and nutrition, the Diary Day they're for, and their totals."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
 
-from fatsecret_mcp.domain.models import DraftEntry, DraftItem, Nutrition, Serving
+from fatsecret_mcp.domain.day_summary import total_nutrition
+from fatsecret_mcp.domain.models import DraftEntry, DraftItem, DraftTotals, FoodEntry, Nutrition, Serving
 
 MAX_METRIC_AMOUNT = 10000
 MAX_KCAL = 20000
+DRAFT_LIFETIME = timedelta(minutes=30)
+MAX_DAYS_BACK = 365
+MAX_DAYS_AHEAD = 7
 
 
 class InvalidDraftItem(ValueError):
     """A proposed amount or its Serving cannot be used in a Draft."""
+
+
+class UnlikelyDiaryDay(ValueError):
+    """A Diary Day too far from today to be meant."""
+
+
+def check_diary_day(diary_day: date, today: date) -> None:
+    """Allow Diary Days from a year back to a week ahead."""
+    days_ahead = (diary_day - today).days
+
+    if days_ahead < -MAX_DAYS_BACK or days_ahead > MAX_DAYS_AHEAD:
+        raise UnlikelyDiaryDay(
+            "A Draft's Diary Day must be at most a year back or a week ahead. Check the date with the User."
+        )
+
+
+def draft_totals(
+    entries: Sequence[FoodEntry], items: Sequence[DraftItem], daily_targets: Nutrition
+) -> DraftTotals:
+    """The items added up, and the Diary Day's totals and what remains once they're added."""
+    item_nutrition = [item.nutrition for item in items]
+    added = sum(item_nutrition, Nutrition())
+    consumed = total_nutrition(entries) + added
+
+    return DraftTotals(
+        added=added,
+        consumed=consumed,
+        daily_targets=daily_targets,
+        remaining=daily_targets - consumed,
+    )
+
+
+def draft_expiry(now: datetime) -> datetime:
+    return now.astimezone(UTC) + DRAFT_LIFETIME
 
 
 def draft_item(

@@ -28,17 +28,11 @@ async def serve(environ: Mapping[str, str], *, transport: Transport, host: str, 
 
 
 async def _serve_stdio(household: Household, user: User) -> None:
-    import httpx2
-
     from fatsecret_mcp.fatsecret.budget import daily_budget
-    from fatsecret_mcp.fatsecret.client import FatSecretApi
+    from fatsecret_mcp.fatsecret.client import connected_api
     from fatsecret_mcp.server import build_server
 
-    async with httpx2.AsyncClient(timeout=20) as http:
-        fatsecret = FatSecretApi(
-            consumer=household.consumer,
-            http=http,
-        )
+    async with connected_api(household.consumer) as fatsecret:
         server = build_server(
             user=user,
             fatsecret=fatsecret,
@@ -50,17 +44,12 @@ async def _serve_stdio(household: Household, user: User) -> None:
 
 
 async def _serve_http(household: Household, host: str, port: int) -> None:
-    import httpx2
     import uvicorn
 
-    from fatsecret_mcp.fatsecret.client import FatSecretApi
+    from fatsecret_mcp.fatsecret.client import connected_api
     from fatsecret_mcp.http import build_http_app
 
-    async with httpx2.AsyncClient(timeout=20) as http:
-        fatsecret = FatSecretApi(
-            consumer=household.consumer,
-            http=http,
-        )
+    async with connected_api(household.consumer) as fatsecret:
         app = build_http_app(household, fatsecret)
         config = uvicorn.Config(
             app=app,

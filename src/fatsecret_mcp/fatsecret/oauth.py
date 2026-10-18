@@ -35,11 +35,13 @@ def signed_url(
     if user is not None:
         oauth["oauth_token"] = user.token
 
-    signed = {**params, **oauth}
     token_secret = user.secret if user else ""
+
+    signed = dict(params)
+    signed.update(oauth)
     signed["oauth_signature"] = signature(http_method, url, signed, consumer.secret, token_secret)
 
-    query = "&".join(f"{percent_encode(k)}={percent_encode(v)}" for k, v in signed.items())
+    query = _query(signed)
 
     return f"{url}?{query}"
 
@@ -48,14 +50,22 @@ def signature(
     http_method: str, url: str, params: Mapping[str, str], consumer_secret: str, token_secret: str = ""
 ) -> str:
     """The OAuth 1.0 HMAC-SHA1 signature of a request (RFC 5849, section 3.4)."""
-    pairs = sorted((percent_encode(k), percent_encode(v)) for k, v in params.items())
-    normalized = "&".join(f"{k}={v}" for k, v in pairs)
+    normalized = _query(params, sort=True)
     base = "&".join((http_method.upper(), percent_encode(url), percent_encode(normalized)))
 
     key = f"{percent_encode(consumer_secret)}&{percent_encode(token_secret)}"
     digest = hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()
 
     return base64.b64encode(digest).decode()
+
+
+def _query(params: Mapping[str, str], *, sort: bool = False) -> str:
+    """`params` percent-encoded as `key=value` pairs joined by `&`, sorted when signing."""
+    pairs = [(percent_encode(key), percent_encode(value)) for key, value in params.items()]
+    ordered = sorted(pairs) if sort else pairs
+    encoded = [f"{key}={value}" for key, value in ordered]
+
+    return "&".join(encoded)
 
 
 def percent_encode(value: str) -> str:

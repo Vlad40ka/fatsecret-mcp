@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import base64
 import binascii
 import hashlib
-import hmac
 
 from pydantic import ValidationError
 
 from fatsecret_mcp.auth.models import SignedValue
+from fatsecret_mcp.signing import from_base64url, signature, signature_matches, to_base64url
+
+# Signed apart from Draft ids, so one can never stand in for the other.
+_CONTEXT = b"fatsecret-mcp:connector:"
 
 
 class InvalidCredential(ValueError):
@@ -19,28 +21,27 @@ class InvalidCredential(ValueError):
 def pkce_challenge(verifier: str) -> str:
     digest = hashlib.sha256(verifier.encode()).digest()
 
-    return _encode(digest)
+    return to_base64url(digest)
 
 
 def seal_token(value: SignedValue, signing_key: str) -> str:
-    encoded = _encode(value.model_dump_json().encode())
-    signature = _signature(encoded, signing_key)
+    encoded = to_base64url(value.model_dump_json().encode())
+    signed = signature(_CONTEXT + encoded.encode(), signing_key)
 
-    return encoded + "." + signature
+    return encoded + "." + signed
 
 
 def open_token[T: SignedValue](value: str, signing_key: str, model: type[T], *, now: float) -> T:
     if len(value) > 16384:
         raise InvalidCredential
 
-    encoded, separator, signature = value.partition(".")
-    expected = _signature(encoded, signing_key)
+    encoded, separator, signed = value.partition(".")
 
-    if not separator or not hmac.compare_digest(signature.encode(), expected.encode()):
+    if not separator or not signature_matches(signed, _CONTEXT + encoded.encode(), signing_key):
         raise InvalidCredential
 
     try:
-        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        payload = from_base64url(encoded)
         claims = model.model_validate_json(payload)
     except (ValueError, binascii.Error, ValidationError):
         raise InvalidCredential from None
@@ -49,14 +50,3 @@ def open_token[T: SignedValue](value: str, signing_key: str, model: type[T], *, 
         raise InvalidCredential
 
     return claims
-
-
-def _signature(encoded: str, signing_key: str) -> str:
-    message = b"fatsecret-mcp:connector:" + encoded.encode()
-    signature = hmac.digest(signing_key.encode(), message, hashlib.sha256)
-
-    return _encode(signature)
-
-
-def _encode(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode().rstrip("=")

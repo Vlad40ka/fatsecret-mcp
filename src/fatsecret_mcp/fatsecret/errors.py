@@ -6,6 +6,7 @@ Every error's message is written for the User and the Operator and holds no secr
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
 
@@ -14,6 +15,16 @@ class FatSecretError(Exception):
 
     code: int | None = None
     """FatSecret's numeric error code, when it sent one."""
+
+    sent: bool = True
+    """False when this server refused the request itself, so nothing reached FatSecret."""
+
+
+def not_sent[E: FatSecretError](error: E) -> E:
+    """`error`, raised by this server before anything was sent to FatSecret."""
+    error.sent = False
+
+    return error
 
 
 class InvalidAccessToken(FatSecretError):
@@ -38,6 +49,8 @@ class DailyQuotaExceeded(FatSecretError):
 
 class BudgetSpent(FatSecretError):
     """This User's share of the daily quota is spent; the request wasn't sent to FatSecret."""
+
+    sent = False
 
     def __init__(self, requests: int, frees_up_at: datetime) -> None:
         when = f"{frees_up_at:%H:%M} on {frees_up_at.day} {frees_up_at:%B} ({frees_up_at.tzinfo})"
@@ -110,18 +123,20 @@ class UpstreamFailure(FatSecretError):
         super().__init__(f"FatSecret didn't answer properly ({reason}). Try again in a moment.")
 
 
+_BY_CODE: dict[int, Callable[[], FatSecretError]] = {
+    9: InvalidAccessToken,
+    11: DailyQuotaExceeded,
+    12: TooManyActions,
+    21: IpAddressRejected,
+    106: NotFound,
+}
+
+
 def from_code(code: int) -> FatSecretError:
     """The error for one of FatSecret's documented error codes."""
-    if code == 9:
-        return InvalidAccessToken()
-    if code == 11:
-        return DailyQuotaExceeded()
-    if code == 12:
-        return TooManyActions()
-    if code == 21:
-        return IpAddressRejected()
-    if code == 106:
-        return NotFound()
+    if code in _BY_CODE:
+        return _BY_CODE[code]()
     if code in (5, 8):
         return CredentialsRejected(code)
+
     return UpstreamFailure(f"error {code}", code)

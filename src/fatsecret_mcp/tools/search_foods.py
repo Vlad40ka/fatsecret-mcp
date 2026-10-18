@@ -21,7 +21,12 @@ from fatsecret_mcp.tools.schemas import (
 
 
 def register(server: MCPServer, fatsecret: FatSecretGateway) -> None:
-    @server.tool(annotations=ToolAnnotations(title="Search Foods", read_only_hint=True))
+    annotations = ToolAnnotations(
+        title="Search Foods",
+        read_only_hint=True,
+    )
+
+    @server.tool(annotations=annotations)
     async def search_foods(
         description: FoodDescription, english_rendering: EnglishRendering = None
     ) -> Annotated[CallToolResult, FoodSearch]:

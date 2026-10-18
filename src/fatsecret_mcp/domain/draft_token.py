@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
 
 from fatsecret_mcp.domain.models import Draft, DraftEntry, Meal
+from fatsecret_mcp.signing import from_base64url, signature, signature_matches, to_base64url
 
 
 class InvalidDraft(ValueError):
@@ -27,21 +25,20 @@ def seal_draft(draft: Draft, signing_key: str) -> str:
         "expires_at": draft.expires_at.isoformat(),
     }
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    encoded = _base64url(serialized.encode())
-    signature = hmac.digest(signing_key.encode(), encoded.encode(), hashlib.sha256)
+    encoded = to_base64url(serialized.encode())
+    signed = signature(encoded.encode(), signing_key)
 
-    return f"{encoded}.{_base64url(signature)}"
+    return f"{encoded}.{signed}"
 
 
 def open_draft(draft_id: str, signing_key: str, *, user_id: str, now: datetime) -> Draft:
     """The Draft sealed in `draft_id`, once its signature, User and expiry check out."""
-    encoded, _, signature = draft_id.partition(".")
-    expected = hmac.digest(signing_key.encode(), encoded.encode(), hashlib.sha256)
+    encoded, _, signed = draft_id.partition(".")
 
-    if not hmac.compare_digest(_base64url(expected).encode(), signature.encode()):
+    if not signature_matches(signed, encoded.encode(), signing_key):
         raise InvalidDraft("This isn't a valid Draft id: it was changed or not issued by this server.")
 
-    draft = _draft(json.loads(_from_base64url(encoded)))
+    draft = _draft(json.loads(from_base64url(encoded)))
 
     if draft.user_id != user_id:
         raise InvalidDraft("This Draft belongs to another User. Draft the Food Entries again.")
@@ -71,13 +68,3 @@ def _draft_entry(item: dict[str, Any]) -> DraftEntry:
         number_of_units=item["number_of_units"],
         entry_name=item["entry_name"],
     )
-
-
-def _from_base64url(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-
-    return base64.urlsafe_b64decode(value + padding)
-
-
-def _base64url(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode().rstrip("=")
