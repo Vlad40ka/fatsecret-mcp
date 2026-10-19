@@ -1,134 +1,151 @@
 # fatsecret-mcp
 
-A self-hosted [MCP](https://modelcontextprotocol.io) server that lets Claude read your [FatSecret](https://www.fatsecret.com) food diary, check it against your daily calorie and macro targets, and log food entries after you approve a draft.
+Log food to your FatSecret diary by talking to Claude on your phone. Claude shows you a draft first, and nothing is saved until you say yes.
+
+<!-- DEMO VIDEO: a 20–30 second phone recording goes here (photo of a nutrition label → the draft → "yes" → the entry in the FatSecret app). Upload the MP4 through GitHub's web editor so it plays inline. -->
+
+> **Demo video coming soon.** It will show a photo of a nutrition label, the draft Claude proposes, a "yes", and the new entry in the FatSecret app.
+
+fatsecret-mcp is a self-hosted [MCP](https://modelcontextprotocol.io) server. It connects Claude to your own [FatSecret](https://www.fatsecret.com) food diary, the one you see in the FatSecret app. Claude can read a day or a few weeks of it against your daily calorie and macro targets. It can find foods in the FatSecret catalog and draft entries from a description or a photo. Each draft shows the amounts, calories, macros, a suggested meal and how your day looks after adding it. When a packaged product isn't in the catalog, a photo of its nutrition label is enough.
+
+One server serves a household: a few people, each signed in with their own FatSecret account. There's no public instance, so you run your own.
 
 This project is unofficial. It is not affiliated with or endorsed by FatSecret, and it is not medical or dietary advice.
 
 [Powered by fatsecret Platform API](https://platform.fatsecret.com)
 
-## Status
+## What you can ask
 
-Early development. The server runs locally over stdio or over HTTP with connector sign-in, answers diary questions, searches foods, prepares drafts and saves the drafts you confirm. Drafts show amounts, calories, macros, assumptions, a suggested meal and the day's totals after adding. They expire after thirty minutes; nothing is written to your diary until you confirm one.
+The server gives Claude five tools. You never call them yourself; you just talk.
 
-## Run it locally
+### `search_foods`
 
-You need Python 3.13, [uv](https://docs.astral.sh/uv/) and your own OAuth 1.0 consumer key and secret from the [FatSecret Platform API](https://platform.fatsecret.com).
+Finds foods in the catalog with servings that can be logged.
 
-Put the configuration in a `.env` file in the repository (it's git-ignored):
+> **You:** How many calories are in a cup of cooked jasmine rice?
+>
+> **Claude:** FatSecret has "Jasmine Rice (cooked)": 1 cup (158 g) is 205 kcal, 4.3 g protein, 0.4 g fat, 44.5 g carbohydrate.
 
-```sh
-FATSECRET_CONSUMER_KEY=...
-FATSECRET_CONSUMER_SECRET=...
-FATSECRET_MCP_SIGNING_KEY=...
-FATSECRET_MCP_USERS='[{"id": "me", "display_name": "Me", "fatsecret_access_token": "...", "fatsecret_access_secret": "...", "daily_targets": {"kcal": 2200, "protein": 140, "fat": 70, "carbohydrate": 250}, "timezone": "Europe/Warsaw"}]'
+### `draft_entries`
+
+Proposes entries without writing anything.
+
+> **You:** *(photo of a plate)* Log this as lunch.
+>
+> **Claude:** Here's the draft for lunch today:
+> - Beef bibimbap, 1 bowl (480 g): 640 kcal, 32 g protein, 21 g fat, 80 g carbohydrate
+>
+> I assumed one restaurant-sized bowl. After adding it you'll be at 1,420 of 2,200 kcal and 78 of 140 g protein. Save it?
+
+### `confirm_draft`
+
+Writes the draft you approved.
+
+> **You:** Yes.
+>
+> **Claude:** Saved. Beef bibimbap is in your FatSecret diary under lunch.
+
+### `get_diary_day`
+
+Reads one day with its totals and what's left of your targets.
+
+> **You:** How much is left today?
+>
+> **Claude:** You've had 1,420 kcal. 780 kcal are left, along with 62 g protein, 18 g fat and 95 g carbohydrate.
+
+### `get_period_summary`
+
+Reads daily totals for up to 31 days.
+
+> **You:** How did my week go compared with the week before?
+>
+> **Claude:** This week you averaged 2,050 kcal and 128 g protein a day; last week 2,240 kcal and 117 g protein. You went over your calorie target on two days this week, and on four the week before.
+
+The numbers above are illustrative.
+
+## How a meal gets logged
+
+```mermaid
+sequenceDiagram
+    actor U as You (Claude app)
+    participant C as Claude
+    participant S as fatsecret-mcp
+    participant F as FatSecret
+    U->>C: photo + "log this as lunch"
+    C->>S: search_foods
+    S->>F: foods.search, food.get
+    C->>S: draft_entries
+    S-->>C: draft (amounts, kcal, macros, meal, the day after adding)
+    C-->>U: shows the draft
+    U->>C: "yes"
+    C->>S: confirm_draft(draft_id)
+    S->>F: food_entry.create, one per item
+    S-->>C: saved entries
 ```
 
-`FATSECRET_MCP_USERS` lists everyone the server serves. You don't write it by hand: `add-user` (below) produces it. With more than one person, set `FATSECRET_MCP_USER` to the `id` the server should act as over stdio.
+The draft is signed by the server and expires after thirty minutes. It can only be confirmed by the person it was made for. In Claude's connector settings, keep `confirm_draft` on "Needs approval" so that every write asks you first.
 
-### Add a user
+## Products the catalog doesn't have
 
-```sh
-uv run --env-file .env fatsecret-mcp add-user
+A free FatSecret API key reaches only the US catalog, in English. Most local and branded products aren't in it. For those, send Claude a photo of the nutrition label. The server logs the product as a stand-in: the closest catalog food, in the amount whose calories match the label, under the product's own name.
+
+```mermaid
+flowchart TD
+    S[Search the catalog for the product] --> Q{Found?}
+    Q -- yes --> E[Normal food entry]
+    Q -- no --> P[Photo of the nutrition label]
+    P --> V[kcal and macros per 100 g]
+    V --> M[Closest catalog food, amount set so kcal match]
+    M --> N[Food entry under the product's own name]
 ```
 
-The command takes about two minutes per person:
+Calories match the label exactly; macros are close but approximate. Opening the entry's details in the FatSecret app shows the catalog food underneath. The server rejects a label whose calories don't roughly agree with its macros, which catches a misread photo or kJ taken for kcal. It doesn't remember stand-ins: next time, Claude reuses the label from the conversation or asks again.
 
-1. It shows a FatSecret link. The new user opens it, signs in with their own FatSecret account (the one in the FatSecret app, not your developer account), allows access, and reads out the PIN that FatSecret shows.
-2. You type their display name, a user `id` for signing in, their daily targets, their timezone (Europe/Warsaw by default) and, optionally, meal hours.
-3. It generates a connector password and shows it once. Give it to the user straight away; the configuration keeps only its scrypt hash.
-4. It prints the complete new `FATSECRET_MCP_USERS` value. Paste the whole value into `.env` or the server's secrets.
+If you log a product often, adding it once in the FatSecret app (which scans barcodes) gives you exact values there.
 
-When `FATSECRET_MCP_USERS` is already set, the new user is added to it and everyone else is kept exactly as written. An `id` that's already taken is refused. To sign an existing user in to FatSecret again, remove them from the value first.
+## What it doesn't do
 
-### Check the configuration
+- It can't look up barcodes, regional catalogs such as a Polish one, or custom foods. A free key reaches only the US catalog, so Claude searches it in English.
+- It can't edit or delete entries. Do that in the FatSecret app.
+- It doesn't track weight, exercise or recipes, only food entries.
+- It doesn't serve strangers. There's no public server, and each server has a fixed list of people.
 
-```sh
-uv run --env-file .env fatsecret-mcp check
+## Run your own
+
+A household server has one **Operator**, the person who deploys it and adds everyone else. Each person in the household signs in to FatSecret once through the Operator, then adds the server to their own Claude account as a custom connector.
+
+```mermaid
+flowchart LR
+    A["Anna's phone (Claude)"] --> CL[Claude connector]
+    J["Jan's phone (Claude)"] --> CL
+    CL -->|"each signs in with their own ID and password"| S[fatsecret-mcp on your server]
+    O[Operator] -->|"add-user, check"| S
+    S -->|"one FatSecret token per person"| F[FatSecret API]
+    F --> D[("each person's own diary, the same as in the FatSecret app")]
 ```
 
-`check` validates the configuration as `serve` does at startup: the HTTP settings when `FATSECRET_MCP_BASE_URL` is set, otherwise the acting user for stdio. Then it reads each user's current diary day, one FatSecret request per user, and reports per user whether the connection works. A revoked access token, an exhausted daily quota and an IP restriction each get their own message. It prints no tokens, secrets or passwords, and exits with status 1 if anything failed.
+You need:
 
-Generate a random signing key once with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` and put it in `FATSECRET_MCP_SIGNING_KEY` (at least 32 characters). Keep it across restarts; changing it invalidates drafts signed with the old key. Draft ids are signed, self-contained values holding entry names, ids, units, meal, diary day, user id and expiry; they contain no nutrition values.
+- your own FatSecret Platform API key. Register at [platform.fatsecret.com](https://platform.fatsecret.com); the free Basic plan is enough. Using it means accepting FatSecret's [API terms](https://platform.fatsecret.com/terms). This project ships no keys;
+- a container host with HTTPS for the server, such as Railway;
+- a Claude account for each person, with custom connectors available on their plan.
 
-Each user's optional `meal_hours` sets local meal start times, for example `"meal_hours": {"breakfast": "06:00", "lunch": "12:00", "dinner": "18:00", "snacks": "22:00"}` inside their user object. A meal lasts until the next start, including across midnight; times must differ. Omitted starts default to 04:00, 11:30, 16:00 and 21:00 respectively. Between midnight and 04:00, drafts ask whether to use Snacks on the previous day. An explicit meal or diary day overrides suggestions. A draft's diary day can be at most a year back or a week ahead.
+The short path:
 
-To try drafting, ask Claude to find a food and propose an amount. `draft_entries` takes `items` with `food_id`, `serving_id`, `number_of_units` and an optional `assumption`. Units follow the serving returned by `search_foods`: a serving described as "100 g" with 100 units needs 150 units for 150 g. Amounts must be positive and finite, with at most 10,000 units, 10,000 g or ml where weight or volume is known, and 20,000 kcal per item. A draft holds at most 20 items; Claude splits a larger meal into several drafts. Text inputs are capped too: 200 characters for a search, 100 for a product name or search phrase, and 300 for an assumption.
+1. Create a `.env` with your FatSecret key and a signing key, then run `add-user` once per person ([setup](docs/setup.md)).
+2. Deploy the image `ghcr.io/jaronskijakub/fatsecret-mcp` with those values ([deploy](docs/deploy.md)).
+3. In Claude, add `https://<your-server>/mcp` as a custom connector and sign in ([connector](docs/connector.md)).
 
-FatSecret's free plan allows 5,000 requests a day for the whole household. Each user gets an equal share of 4,500 of them, for example 2,250 each for two users; the remaining 500 are left for `add-user` and `check`. Every request sent counts, catalog searches included, and each one frees up 24 hours after it was made; a food served from memory costs nothing. When a user's share is spent, their next request is refused before it reaches FatSecret, with the time it frees up again; other users keep working. Requests the server refuses itself cost nothing: after FatSecret reports too many actions it sends nothing for thirty seconds, and after it reports the daily quota used up it sends nothing for ten minutes. The logs mark those requests as `not sent`, unlike errors FatSecret returned. The counts are kept in memory by one running server and reset when it restarts; a second server with the same FatSecret key, such as a local stdio copy, counts separately.
-
-All users' requests are paced together, at most one a second. The server holds up to ten requests in reserve and earns one back every three seconds; once the reserve is used, a request waits for its turn instead of failing. After a quiet spell about fourteen requests go a second apart, then one every three seconds, so no minute holds more than thirty and the steady rate is twenty a minute. A search waits at most about twelve seconds, unless other searches are queued ahead of it. FatSecret's own limit is undocumented: it refused about 38 requests in 50 seconds, so these numbers are this server's policy, not a guarantee.
-
-When you approve a draft, Claude calls `confirm_draft` with its `draft_id`, and Claude Code asks you to allow the write. Each item becomes one food entry in your FatSecret diary, under the draft's name, meal and day. A draft can be confirmed only by the user it was made for and only before it expires. Confirming it again writes nothing and returns the earlier result. That holds until the draft expires or the server restarts. If FatSecret fails part-way through, the result lists which entries were saved; draft the rest again.
-
-Food search uses only the FatSecret catalog that a free API key can reach: US foods, searched in English. Pass a description in your own language and Claude adds an English rendering. Search never reads your diary, so each search costs one catalog request plus one per food shown (up to three). A food fetched with its servings is kept in memory for an hour and shared by all users, so repeating a search costs only the catalog request, and drafting a food just found costs nothing. For a dish on a plate, Claude searches the whole dish first and its components only when the dish has no good match.
-
-Past-day entries are shared across diary questions in memory until the server stops or twelve hours pass from fetching them. Today is always read fresh. If you edit a past day in the FatSecret app, ask Claude to refresh it: `get_diary_day` and `get_period_summary` accept `refresh=true`. Period summaries reuse cached entries and fetch month totals for dates not yet loaded.
-
-Then add the server to Claude Code. Without a command, `fatsecret-mcp` serves over stdio, the same as `fatsecret-mcp serve`:
-
-```sh
-claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file .env fatsecret-mcp
-```
-
-## Run over HTTP
-
-For HTTP, set `FATSECRET_MCP_BASE_URL` to the server's public HTTPS origin, for example `https://diary.example.com`. For local development, use `http://127.0.0.1:8000`. The value has no path, query or credentials; the connector URL is that origin plus `/mcp`.
-
-Each user needs a connector password. `add-user` generates one and stores its scrypt hash in that user's `connector_password_hash` field. Their optional `session_generation` is an integer starting at `0`. Keep the existing instance signing key: it also signs connector credentials, using a separate signing context from drafts. Configuration errors stop the server before it starts listening.
-
-```sh
-uv run --env-file .env fatsecret-mcp serve --transport http --host 127.0.0.1 --port 8000
-```
-
-`GET /health` returns only `{"status":"ok"}`. An unauthenticated request to `/mcp` returns `401` and the address of the OAuth metadata. Once the server is reachable over HTTPS, add its `/mcp` URL as a custom connector in Claude. Sign in with your user `id` and connector password. The sign-in page names the host your browser returns to, which is always `claude.ai`. The server does not offer dynamic client registration.
-
-Only Claude's own connector can start sign-in. The server pins two values used by Claude's web, desktop and mobile apps: the client ID `https://claude.ai/oauth/mcp-oauth-client-metadata` and the callback `https://claude.ai/api/mcp/auth_callback`, both in `auth/client_metadata.py`. It fetches that one client metadata document and requires it to list the callback as well. The document is fetched over its own two connections, separate from FatSecret calls, and kept for an hour; a failed fetch isn't kept. At most ten fetches run in a minute; beyond that, opening the sign-in page returns `503` with `Retry-After` until the minute passes. Any other client ID is refused before any request is made, so a link to the sign-in page can't send your code anywhere else. If Claude changes either value, adding the connector fails with `invalid_request` before the sign-in page appears. The callback is listed in Anthropic's [Authentication for connectors](https://claude.com/docs/connectors/building/authentication); the client ID is not published there. To find the new values, open the failed sign-in page's address: its `client_id` and `redirect_uri` parameters are what Claude sent. Update the constants and redeploy.
-
-Authorization uses PKCE S256. Signed codes expire after sixty seconds and can be exchanged once per running instance. Signed access tokens last one hour and are bound to this server and user. They survive a restart with the same configuration; the record of used codes is kept in memory. HTTP access logs are disabled because authorization URLs contain credentials.
-
-Claude renews access with a signed refresh token. Each refresh returns a new refresh token valid for thirty days, so a connector used at least once a month stays signed in. Nothing is stored server-side, so an earlier refresh token keeps working until it expires. To sign out every device of one user, for example after losing a phone, increase their `session_generation` and redeploy: all of their access and refresh tokens stop working, and they sign in again with the same password. Removing a user from `FATSECRET_MCP_USERS` invalidates their tokens and blocks their sign-in.
-
-Sign-in allows at most sixty attempts across the server in a rolling minute and two password checks at a time. Extra attempts get HTTP 429 with `Retry-After`; rejected attempts do not extend the minute-long limit. Each sign-in form accepts at most five submissions, then asks you to start sign-in again from your connector.
-
-After five failed sign-ins for one user name, sign-in with that name is paused for fifteen minutes, even with the correct password. The limit applies to every typed name in the same way, so it doesn't reveal which names exist. Someone who knows a user's `id` can therefore delay that user's next sign-in, but connectors that are already signed in keep working. The counters remember at most 1,024 names and 1,024 forms, without scanning every name on each attempt. They are kept in memory and reset when the server restarts.
-
-## Run with Docker
-
-CI builds and tests the image on pull requests. After a successful push to `main`, it publishes `ghcr.io/<owner>/<repository>:latest` and a tag with the full commit SHA, for Linux amd64 and arm64. Replace `<owner>` and `<repository>` with your GitHub repository's namespace and name.
-
-The first publication creates a private GHCR package. The repository owner must change its visibility to **Public** in the package settings, then rerun CI. The final CI step checks that the published image can be pulled without signing in.
-
-Use the same HTTP configuration as above, supplied at runtime. Docker's `--env-file` expects `KEY=value` lines without shell quotes: keep `FATSECRET_MCP_USERS` as a single JSON line, removing the surrounding single quotes from the example above.
-
-```sh
-docker run --rm --env-file .env -p 8080:8080 \
-  -e FATSECRET_MCP_BASE_URL=http://127.0.0.1:8080 \
-  'ghcr.io/<owner>/<repository>:latest'
-```
-
-Leave the server running. In a second terminal, check its health:
-
-```sh
-curl --fail http://127.0.0.1:8080/health
-```
-
-Expect `{"status":"ok"}`. If the server is still starting, retry the request. To stop it, press Ctrl+C in the first terminal.
-
-The image starts HTTP on `0.0.0.0:8080`, runs as a non-root user, and checks `/health`. Set `PORT` to change the listening port and adjust the published port to match. On a container host, set `FATSECRET_MCP_BASE_URL` to its public HTTPS origin. Configuration and credentials are read only from the runtime environment.
-
-To build and test locally, with Docker running:
-
-```sh
-docker build -t fatsecret-mcp:local .
-FATSECRET_CONTAINER_IMAGE=fatsecret-mcp:local uv run pytest tests/test_container.py -v -s
-```
-
-The container tests use synthetic credentials, make no FatSecret calls, and report the time from starting the container to a healthy HTTP response. The build installs the locked runtime dependencies and compiles bytecode in a separate stage; the final image contains the installed package without build or development tools.
+To try it on your own computer first, run it over stdio with Claude Code; [setup](docs/setup.md#run-it-with-claude-code) covers that too. Request quotas, pacing and caching are described in [limits](docs/limits.md), and the trust model in [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
-- **Your own recent foods.** Products you often log, such as local or branded ones the US catalog lacks, aren't searched yet. Reading them from your FatSecret diary took too many API requests, so this needs another approach, for example another food database whose product is then logged to FatSecret as a new entry.
-- **Remember products logged from a label.** A product logged from a photo of its nutrition label will need its label again next time. The server could remember such products per user, which needs persistent storage.
+- Edit and delete food entries, starting with "undo that" right after a wrong save.
+- Custom foods for users with a FatSecret Premier key, so a branded product can be logged with exact values instead of a stand-in.
+- Open Food Facts lookups for products the US catalog lacks, by name or barcode.
+- Your own recent foods. Products you often log aren't searched yet; reading them from your diary took too many API requests, so this needs another approach.
+- Remember products logged from a label, so a stand-in doesn't need the photo again. This needs persistent storage.
+- Native confirmation dialogs in Claude for saving a draft, instead of a "yes" in the chat.
 
 ## Development
 
@@ -139,7 +156,7 @@ uv run pyright
 uv run pytest
 ```
 
-The tests never call FatSecret. They replay recorded responses from `tests/fixtures/fatsecret/`. An opt-in smoke test reads your real diary: `FATSECRET_LIVE_SMOKE=1 uv run --env-file .env pytest tests/test_live_smoke.py`.
+The tests never call FatSecret. They replay recorded responses from `tests/fixtures/fatsecret/`. An opt-in smoke test reads your real diary: `FATSECRET_LIVE_SMOKE=1 uv run --env-file .env pytest tests/test_live_smoke.py`. Container tests are described in [deploy](docs/deploy.md#build-and-test-the-image).
 
 ## License
 

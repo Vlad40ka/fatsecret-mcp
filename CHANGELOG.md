@@ -1,0 +1,19 @@
+# Changelog
+
+All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
+
+## [0.1.0] - Unreleased
+
+The first release.
+
+### Added
+
+- Five MCP tools: `search_foods`, `draft_entries`, `confirm_draft`, `get_diary_day` and `get_period_summary`.
+- Drafts that show amounts, calories, macros, assumptions, a suggested meal and the day after adding against daily targets. Nothing is written until a draft is confirmed.
+- Stand-ins: a product missing from the catalog is logged from its nutrition label as the closest catalog food, with calories matching the label, under the product's own name.
+- One server for a household: each person signs in to FatSecret once through `add-user` and to the connector with their own password.
+- stdio for Claude Code, and HTTP with OAuth sign-in for Claude's web, desktop and mobile apps.
+- Sign-in hardening: PKCE, refresh tokens, signing out by `session_generation`, throttling and pinned Claude client values.
+- A daily share of the FatSecret quota for each person, paced requests and in-memory caching.
+- The `add-user`, `check` and `serve` commands.
+- A container image for Linux amd64 and arm64, published to GHCR by CI.
