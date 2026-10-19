@@ -346,7 +346,7 @@ async def test_a_draft_that_wrote_nothing_can_be_confirmed_again(
     assert confirmed["status"] == "confirmed"
 
 
-async def test_the_confirm_tool_is_destructive_idempotent_and_asks_for_explicit_approval(
+async def test_the_confirm_tool_is_destructive_not_idempotent_and_asks_for_explicit_approval(
     connect: Connect,
 ) -> None:
     async with connect("jakub") as client:
@@ -357,9 +357,10 @@ async def test_the_confirm_tool_is_destructive_idempotent_and_asks_for_explicit_
     assert tool.annotations is not None
     assert tool.annotations.read_only_hint is False
     assert tool.annotations.destructive_hint is True
-    assert tool.annotations.idempotent_hint is True
+    assert tool.annotations.idempotent_hint is False
     assert tool.output_schema is not None
     assert "explicitly approved" in (tool.description or "")
+    assert "Confirm each Draft once" in (tool.description or "")
 
 
 async def test_an_overlong_draft_id_is_refused_before_any_fatsecret_request(

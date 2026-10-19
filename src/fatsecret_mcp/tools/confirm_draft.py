@@ -33,7 +33,8 @@ def register(
         title="Confirm Draft",
         read_only_hint=False,
         destructive_hint=True,
-        idempotent_hint=True,
+        # Confirmed Drafts are remembered in memory only, so a repeat after a restart writes again.
+        idempotent_hint=False,
     )
     confirmed_drafts = ConfirmedDrafts()
     # One confirm at a time, so a double tap can't write the same Draft twice.
@@ -44,8 +45,9 @@ def register(
         """Write a Draft's Food Entries to the User's Food Diary, under its Meal and Diary Day.
 
         Call this only after the User explicitly approved this Draft in their latest message.
-        After a correction, draft again and confirm the new Draft instead. Confirming the same
-        Draft again writes nothing and returns the earlier result.
+        After a correction, draft again and confirm the new Draft instead.
+        Confirm each Draft once: a repeat usually returns the earlier result, but after a server
+        restart it would write the Food Entries again.
         """
         async with confirming:
             now = clock()
