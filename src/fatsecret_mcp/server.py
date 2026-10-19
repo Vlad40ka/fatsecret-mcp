@@ -13,6 +13,7 @@ from fatsecret_mcp.config.models import User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
 from fatsecret_mcp.fatsecret.budget import BudgetedGateway, DailyBudget
 from fatsecret_mcp.fatsecret.diary import UserDiary
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from fatsecret_mcp.tools import (
     confirm_draft,
@@ -35,8 +36,9 @@ This server reads the User's own FatSecret Food Diary, the one they see in the F
 Targets and what remains. Omit diary_day for today: the server knows the User's timezone.
 - get_period_summary shows daily totals and Daily Targets for an inclusive range of up to 31 Diary \
 Days. Days with has_food_entries=false have no Food Entries. Compare periods with two calls.
-- search_foods finds catalog Foods with loggable Servings. \
-Pass an English rendering for non-English descriptions. A not_found result means there are no \
+- search_foods finds catalog Foods with loggable Servings. Search a composed dish as a whole first \
+(e.g. "beef bibimbap"), and its components separately only when the dish has no good match. Pass \
+an English rendering for non-English descriptions. A not_found result means there are no \
 loggable matches.
 - When a branded product isn't among the matches, ask for a photo of its Nutrition Label, unless \
 the User already gave its values, and draft it as a Nutrition Label item: the server logs it as a \
@@ -65,10 +67,12 @@ def build_server(
     *,
     signing_key: SecretStr,
     daily_requests: int,
+    food_cache: FoodCache,
 ) -> MCPServer:
     """The MCP server acting as `user`: it reads their diary and writes the Drafts they confirm.
 
-    Every FatSecret request it makes counts towards the User's `daily_requests`.
+    Every FatSecret request it makes counts towards the User's `daily_requests`. Foods come from
+    `food_cache`, which the server's owner shares between Users and keeps running.
     """
     budget = DailyBudget(
         requests=daily_requests,
@@ -102,8 +106,8 @@ def build_server(
 
     get_diary_day.register(server, user, diary, clock)
     get_period_summary.register(server, user, diary)
-    search_foods.register(server, budgeted)
-    draft_entries.register(server, user, budgeted, diary, clock, signing_key)
+    search_foods.register(server, budgeted, food_cache)
+    draft_entries.register(server, user, budgeted, food_cache, diary, clock, signing_key)
     confirm_draft.register(server, user, budgeted, diary, clock, signing_key)
 
     return server

@@ -8,6 +8,7 @@ forgotten on restart.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
@@ -21,6 +22,8 @@ from fatsecret_mcp.limits import RollingWindow
 FATSECRET_DAILY_QUOTA = 5000
 OPERATOR_RESERVE = 500
 WINDOW = timedelta(hours=24)
+
+logger = logging.getLogger(__name__)
 
 
 def daily_budget(user_count: int) -> int:
@@ -48,6 +51,10 @@ class DailyBudget:
 
         if wait is not None:
             frees_up_at = (now + timedelta(seconds=wait)).astimezone(self._timezone)
+
+            logger.warning(
+                "FatSecret request not sent: BudgetSpent (a daily budget of %d requests)", self._requests
+            )
 
             raise BudgetSpent(self._requests, frees_up_at)
 

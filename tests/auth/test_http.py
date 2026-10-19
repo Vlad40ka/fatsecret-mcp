@@ -7,6 +7,7 @@ import hashlib
 import logging
 import re
 import threading
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -22,9 +23,11 @@ from pydantic import SecretStr
 from fatsecret_mcp.config.loader import HouseholdConfigError
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
+from fatsecret_mcp.fatsecret import food_cache as food_cache_module
 from fatsecret_mcp.http import build_http_app
 from tests.conftest import FakeClock
 from tests.fatsecret.fake import FakeFatSecret, food_entry
+from tests.test_server import wait_until_collected
 
 pytestmark = pytest.mark.anyio
 
@@ -499,6 +502,46 @@ async def test_two_signed_in_users_see_only_their_own_diary(
     assert "Kanapka Oli" in ola.text
     assert "Owsianka Jakuba" not in ola.text
     assert ola.json()["result"]["structuredContent"]["daily_targets"]["kcal"] == 1900
+
+
+async def test_a_food_one_user_fetched_is_reused_for_another_user_and_released_while_idle(
+    http: httpx2.AsyncClient, fatsecret: FakeFatSecret, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    short_ttl = timedelta(milliseconds=25)
+    serving = Serving(
+        id="rice-100g",
+        description="100 g",
+        metric_amount=100,
+        metric_unit="g",
+        number_of_units=100,
+        nutrition=Nutrition(kcal=130),
+    )
+    food = Food(
+        id="rice",
+        name="Cooked Rice",
+        brand=None,
+        servings=[serving],
+    )
+    reference = weakref.ref(food)
+
+    monkeypatch.setattr(food_cache_module, "FOOD_CACHE_TTL", short_ttl)
+    fatsecret.add_food(food)
+    fatsecret.set_search_results("rice", [food])
+    del food
+
+    jakub_token = (await sign_in(http, "jakub"))["access_token"]
+    ola_token = (await sign_in(http, "ola"))["access_token"]
+
+    await call_tool(http, jakub_token, "search_foods", {"description": "rice"})
+    found = await call_tool(http, ola_token, "search_foods", {"description": "rice"})
+
+    assert found.json()["result"]["structuredContent"]["status"] == "found"
+    # Jakub's search and its one Food, then only Ola's search.
+    assert fatsecret.requests == 2 + 1
+
+    fatsecret.remove_food("rice")
+    clock.now += short_ttl
+    await wait_until_collected(reference)
 
 
 async def test_a_token_for_another_resource_is_rejected_even_with_the_same_signing_key(

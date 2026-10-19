@@ -15,6 +15,7 @@ from fatsecret_mcp.domain.draft_token import seal_draft
 from fatsecret_mcp.domain.models import Draft, DraftEntry, Meal
 from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
@@ -74,9 +75,9 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
         fatsecret.serve(recorded)
         fatsecret.serve("food_entries_get_empty.json")
     elif recorded == "foods_search_single.json":
-        # Same recorded response, requested with the tool's five-result limit.
+        # Same recorded response, requested with the tool's three-result limit.
         exchange = fixture(recorded)
-        exchange["request"]["params"]["max_results"] = "5"
+        exchange["request"]["params"]["max_results"] = "3"
 
         fatsecret.serve(exchange)
         fatsecret.serve("food_get_generic.json")
@@ -91,6 +92,7 @@ async def test_a_tool_call_logs_no_secrets_and_no_nutrition(
             clock=CLOCK,
             signing_key=household.signing_key,
             daily_requests=daily_budget(len(household.users)),
+            food_cache=FoodCache(clock=CLOCK),
         )
 
         async with Client(server) as client:

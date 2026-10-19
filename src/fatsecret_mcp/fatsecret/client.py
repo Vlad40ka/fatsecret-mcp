@@ -133,7 +133,7 @@ class FatSecretApi:
 
             return parsing.token_and_secret(response.text)
         except FatSecretError as error:
-            logger.warning("FatSecret sign-in failed: %s", type(error).__name__)
+            logger.warning("FatSecret sign-in %s: %s", _outcome(error), type(error).__name__)
             raise
 
     async def _call(
@@ -151,7 +151,9 @@ class FatSecretApi:
                 if "error" in body:
                     raise _error(body["error"])
         except FatSecretError as error:
-            logger.warning("FatSecret %s failed: %s (code %s)", method, type(error).__name__, error.code)
+            logger.warning(
+                "FatSecret %s %s: %s (code %s)", method, _outcome(error), type(error).__name__, error.code
+            )
             raise
 
         return body
@@ -179,6 +181,11 @@ def _json_object(response: httpx2.Response) -> dict[str, Any]:
         raise UpstreamFailure("unexpected response")
 
     return cast(dict[str, Any], body)
+
+
+def _outcome(error: FatSecretError) -> str:
+    """How a failed request reads in the logs: FatSecret's refusal, or this server's own."""
+    return "failed" if error.sent else "not sent"
 
 
 def _error(error: object) -> FatSecretError:

@@ -35,6 +35,7 @@ from fatsecret_mcp.config.loader import validate_http_household
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.diary_day import Clock, system_clock
 from fatsecret_mcp.fatsecret.budget import daily_budget
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 
 # HTTP client debug logs can contain the authorization query or a token response.
@@ -57,9 +58,11 @@ def build_http_app(
         http=metadata_client,
         clock=clock,
     )
+    food_cache = FoodCache(clock=clock)
     mcp = _UserServers(
         household=household,
         fatsecret=fatsecret,
+        food_cache=food_cache,
         clock=clock,
         auth=auth,
     )
@@ -101,7 +104,7 @@ def build_http_app(
             if metadata_http is None:
                 await clients.enter_async_context(metadata_client)
 
-            async with anyio.create_task_group() as tasks:
+            async with food_cache.lifespan(), anyio.create_task_group() as tasks:
                 mcp.tasks = tasks
 
                 try:
@@ -122,13 +125,22 @@ def build_http_app(
 
 
 class _UserServers:
-    """Start each User's MCP tools on first use, with lifetimes owned by the HTTP app."""
+    """Start each User's MCP tools on first use, with lifetimes owned by the HTTP app.
+
+    All Users share one Food cache, since catalog data isn't per User.
+    """
 
     def __init__(
-        self, household: Household, fatsecret: FatSecretGateway, clock: Clock, auth: ConnectorAuth
+        self,
+        household: Household,
+        fatsecret: FatSecretGateway,
+        food_cache: FoodCache,
+        clock: Clock,
+        auth: ConnectorAuth,
     ) -> None:
         self.household = household
         self.fatsecret = fatsecret
+        self.food_cache = food_cache
         self.clock = clock
         self.auth = auth
         self.apps: dict[str, Starlette] = {}
@@ -183,6 +195,7 @@ class _UserServers:
             clock=self.clock,
             signing_key=self.household.signing_key,
             daily_requests=daily_budget(len(self.household.users)),
+            food_cache=self.food_cache,
         )
         security = TransportSecuritySettings(
             allowed_hosts=[urlsplit(self.auth.identity.base_url).netloc],

@@ -28,16 +28,21 @@ async def serve(environ: Mapping[str, str], *, transport: Transport, host: str, 
 
 
 async def _serve_stdio(household: Household, user: User) -> None:
+    from fatsecret_mcp.domain.diary_day import system_clock
     from fatsecret_mcp.fatsecret.budget import daily_budget
     from fatsecret_mcp.fatsecret.client import connected_api
+    from fatsecret_mcp.fatsecret.food_cache import FoodCache
     from fatsecret_mcp.server import build_server
 
-    async with connected_api(household.consumer) as fatsecret:
+    food_cache = FoodCache(clock=system_clock)
+
+    async with connected_api(household.consumer) as fatsecret, food_cache.lifespan():
         server = build_server(
             user=user,
             fatsecret=fatsecret,
             signing_key=household.signing_key,
             daily_requests=daily_budget(len(household.users)),
+            food_cache=food_cache,
         )
 
         await server.run_stdio_async()

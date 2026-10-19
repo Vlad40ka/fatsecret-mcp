@@ -26,6 +26,7 @@ from fatsecret_mcp.domain.stand_ins import check_label, stand_in_item
 from fatsecret_mcp.fatsecret.catalog import loggable_foods
 from fatsecret_mcp.fatsecret.diary import UserDiary
 from fatsecret_mcp.fatsecret.errors import FatSecretError, NotFound
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.gateway import FatSecretGateway
 from fatsecret_mcp.tools.schemas import (
     MAX_DRAFT_ID_LENGTH,
@@ -46,6 +47,7 @@ def register(
     server: MCPServer,
     user: User,
     fatsecret: FatSecretGateway,
+    food_cache: FoodCache,
     diary: UserDiary,
     clock: Clock,
     signing_key: SecretStr,
@@ -93,7 +95,7 @@ def register(
             check_diary_day(day, user_today)
 
             for item in items:
-                prepared.append(await _prepared_item(item, fatsecret))
+                prepared.append(await _prepared_item(item, fatsecret, food_cache))
 
             entries = await diary.entries(day)
         except (FatSecretError, InvalidDraftItem, UnlikelyDiaryDay) as error:
@@ -131,22 +133,26 @@ def register(
         return as_tool_result(result)
 
 
-async def _prepared_item(item: DraftItemInput, fatsecret: FatSecretGateway) -> DraftItem:
+async def _prepared_item(
+    item: DraftItemInput, fatsecret: FatSecretGateway, food_cache: FoodCache
+) -> DraftItem:
     if isinstance(item, NutritionLabelDraftInput):
-        return await _stand_in(item, fatsecret)
+        return await _stand_in(item, fatsecret, food_cache)
 
-    name, serving = await _resolve_serving(item, fatsecret)
+    name, serving = await _resolve_serving(item, fatsecret, food_cache)
 
     return draft_item(item.food_id, name, serving, item.number_of_units, item.assumption)
 
 
-async def _stand_in(item: NutritionLabelDraftInput, fatsecret: FatSecretGateway) -> DraftItem:
+async def _stand_in(
+    item: NutritionLabelDraftInput, fatsecret: FatSecretGateway, food_cache: FoodCache
+) -> DraftItem:
     label = item.nutrition_label.as_label()
 
     # An implausible label is rejected before it costs any catalog requests.
     check_label(label)
 
-    foods = await loggable_foods(fatsecret, item.search_phrase)
+    foods = await loggable_foods(fatsecret, food_cache, item.search_phrase)
 
     return stand_in_item(
         product_name=item.product_name,
@@ -157,12 +163,14 @@ async def _stand_in(item: NutritionLabelDraftInput, fatsecret: FatSecretGateway)
     )
 
 
-async def _resolve_serving(item: FoodDraftInput, fatsecret: FatSecretGateway) -> tuple[str, Serving]:
+async def _resolve_serving(
+    item: FoodDraftInput, fatsecret: FatSecretGateway, food_cache: FoodCache
+) -> tuple[str, Serving]:
     if item.serving_id == "0":
         raise ToolError("Serving 0 is derived and cannot be logged. Choose a Serving from search_foods.")
 
     try:
-        catalog_food = await fatsecret.get_food(item.food_id)
+        catalog_food = await food_cache.get_food(item.food_id, fatsecret)
     except NotFound:
         raise ToolError("Unknown Food: use the ids of a match from search_foods.") from None
 

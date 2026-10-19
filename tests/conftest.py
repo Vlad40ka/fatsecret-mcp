@@ -11,6 +11,7 @@ from mcp import Client
 from fatsecret_mcp.config.loader import load_household
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.fatsecret.budget import daily_budget
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.fatsecret.fake import FakeFatSecret
@@ -103,7 +104,15 @@ def clock() -> FakeClock:
 
 
 @pytest.fixture
-def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) -> Callable[[str], Client]:
+def food_cache(clock: FakeClock) -> FoodCache:
+    """The Food cache every User's server of one test shares, as on a running server."""
+    return FoodCache(clock=clock)
+
+
+@pytest.fixture
+def connect(
+    household: Household, fatsecret: FakeFatSecret, clock: FakeClock, food_cache: FoodCache
+) -> Callable[[str], Client]:
     """An in-memory MCP client session with the real server, acting as one User of the Household."""
 
     def connect(user_id: str) -> Client:
@@ -113,6 +122,7 @@ def connect(household: Household, fatsecret: FakeFatSecret, clock: FakeClock) ->
             clock=clock,
             signing_key=household.signing_key,
             daily_requests=daily_budget(len(household.users)),
+            food_cache=food_cache,
         )
 
         return Client(server)

@@ -43,6 +43,14 @@ class FakeFatSecret:
     def add_food(self, food: Food) -> None:
         self._catalog[food.id] = food
 
+    def remove_food(self, food_id: str) -> None:
+        """The catalog no longer has this Food, neither to fetch nor among search results."""
+        del self._catalog[food_id]
+
+        for query, foods in self._search_results.items():
+            remaining = [food for food in foods if food.id != food_id]
+            self._search_results[query] = remaining
+
     def set_search_results(self, query: str, foods: Sequence[CatalogFood]) -> None:
         self._search_results[query] = list(foods)
 

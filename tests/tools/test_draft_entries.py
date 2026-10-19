@@ -17,6 +17,7 @@ from mcp import Client
 from fatsecret_mcp.config.models import Household, User
 from fatsecret_mcp.domain.models import Food, Meal, Nutrition, Serving
 from fatsecret_mcp.fatsecret.budget import daily_budget
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
 from tests.fatsecret.fake import FakeFatSecret, food_entry
@@ -225,6 +226,7 @@ async def test_each_user_can_configure_their_meal_hours(
         clock=clock,
         signing_key=household.signing_key,
         daily_requests=daily_budget(len(household.users)),
+        food_cache=FoodCache(clock=clock),
     )
     items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}]
 
@@ -456,6 +458,7 @@ async def test_the_same_utc_instant_uses_each_users_timezone_for_meal_and_diary_
         clock=clock,
         signing_key=household.signing_key,
         daily_requests=daily_budget(len(household.users)),
+        food_cache=FoodCache(clock=clock),
     )
     items = [{"food_id": rice.id, "serving_id": "rice-100g", "number_of_units": 100}]
 

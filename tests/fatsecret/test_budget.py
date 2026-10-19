@@ -11,6 +11,7 @@ from mcp import Client
 from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.fatsecret.budget import FATSECRET_DAILY_QUOTA, daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock, FakeRequestClock
@@ -27,6 +28,7 @@ def serve(household: Household, fatsecret: FakeFatSecret, clock: FakeClock, user
         clock=clock,
         signing_key=household.signing_key,
         daily_requests=3,
+        food_cache=FoodCache(clock=clock),
     )
 
     return Client(server)
@@ -71,6 +73,21 @@ async def test_a_spent_request_frees_up_twenty_four_hours_after_it_was_made(
     assert fatsecret.requests == 4
 
 
+async def test_a_request_refused_for_a_spent_budget_is_logged_as_not_sent(
+    household: Household, fatsecret: FakeFatSecret, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with serve(household, fatsecret, clock, "jakub") as jakub:
+        for description in ("rice", "oats", "skyr"):
+            assert not (await jakub.call_tool("search_foods", {"description": description})).is_error
+
+        assert (await jakub.call_tool("search_foods", {"description": "eggs"})).is_error
+
+    budget_records = [record for record in caplog.records if record.name == "fatsecret_mcp.fatsecret.budget"]
+    messages = [record.getMessage() for record in budget_records]
+
+    assert messages == ["FatSecret request not sent: BudgetSpent (a daily budget of 3 requests)"]
+
+
 @pytest.mark.parametrize("users", [1, 2, 3, 5, 10])
 def test_the_whole_household_fits_under_fatsecrets_daily_quota(users: int) -> None:
     assert daily_budget(users) * users < FATSECRET_DAILY_QUOTA
@@ -102,6 +119,7 @@ async def test_requests_the_server_refuses_itself_during_a_cooldown_cost_no_budg
             clock=clock,
             signing_key=household.signing_key,
             daily_requests=2,
+            food_cache=FoodCache(clock=clock),
         )
 
         async with Client(server) as jakub:

@@ -73,23 +73,6 @@ def protein_bars(fatsecret: FakeFatSecret) -> list[Food]:
             )
         ],
     )
-    granola = catalog_food(
-        "granola-bar",
-        "Granola Bar",
-        [
-            serving(
-                "granola-1",
-                "1 bar (40 g)",
-                40,
-                Nutrition(
-                    kcal=190,
-                    protein=4,
-                    fat=7,
-                    carbohydrate=29,
-                ),
-            )
-        ],
-    )
     # Its Macros match the label exactly, but a Serving without grams can't be scaled.
     bites = catalog_food(
         "protein-bites",
@@ -125,7 +108,7 @@ def protein_bars(fatsecret: FakeFatSecret) -> list[Food]:
             )
         ],
     )
-    foods = [peanut_butter, granola, bites, chocolate]
+    foods = [peanut_butter, bites, chocolate]
     found = [search_result(food) for food in foods]
 
     for food in foods:

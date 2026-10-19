@@ -131,7 +131,7 @@ async def test_derived_servings_are_never_offered(
         assert [serving["serving_id"] for serving in match["servings"]] == ["50321"]
 
 
-async def test_search_returns_only_the_top_five_foods(
+async def test_search_returns_only_the_top_three_foods_at_four_requests(
     connect: Connect, fatsecret: FakeFatSecret, chicken: Food
 ) -> None:
     foods = [replace(chicken, id=str(index)) for index in range(8)]
@@ -146,7 +146,8 @@ async def test_search_returns_only_the_top_five_foods(
 
     assert not result.is_error
     assert result.structured_content is not None
-    assert [food["food_id"] for food in result.structured_content["matches"]] == ["0", "1", "2", "3", "4"]
+    assert [food["food_id"] for food in result.structured_content["matches"]] == ["0", "1", "2"]
+    assert fatsecret.requests == 1 + 3
 
 
 async def test_a_food_no_longer_available_is_skipped(
@@ -208,6 +209,21 @@ async def test_search_is_read_only_and_requests_an_english_rendering(connect: Co
     assert tool.annotations.read_only_hint is True
     assert "non-English" in (tool.description or "")
     assert "English rendering" in (tool.description or "")
+
+
+async def test_claude_is_told_to_search_a_composed_dish_as_a_whole_first(connect: Connect) -> None:
+    async with connect("jakub") as client:
+        instructions = client.instructions
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    description = tools["search_foods"].description or ""
+
+    assert instructions is not None
+
+    for guidance in (description, instructions):
+        assert "composed dish" in guidance
+        assert "as a whole first" in guidance
+        assert "components separately only when" in guidance
 
 
 async def test_search_reads_only_the_catalog_never_the_food_diary(

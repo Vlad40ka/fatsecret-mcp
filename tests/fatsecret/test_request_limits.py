@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import date
 
@@ -14,6 +15,7 @@ from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
 from fatsecret_mcp.fatsecret.errors import DailyQuotaExceeded, FatSecretError, TooManyActions
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.request_limits import RequestLimits
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock, FakeRequestClock
@@ -34,6 +36,28 @@ def answer(request: httpx2.Request) -> httpx2.Response:
     recorded = fixture(RESPONSES[request.url.params["method"]])
 
     return httpx2.Response(200, json=recorded["response"]["json"])
+
+
+def catalog_answer(request: httpx2.Request) -> httpx2.Response:
+    """Any search finds as many Foods as requested, each fetched as the recorded chicken breast."""
+    params = request.url.params
+
+    if params["method"] == "foods.search":
+        query = params["search_expression"]
+        matches = [
+            {"food_id": f"{query}/{index}", "food_name": f"{query} {index}", "food_type": "Generic"}
+            for index in range(int(params["max_results"]))
+        ]
+
+        return httpx2.Response(200, json={"foods": {"food": matches}})
+
+    if params["method"] == "food.get.v5":
+        recorded = fixture("food_get_generic.json")["response"]["json"]
+        recorded["food"]["food_id"] = params["food_id"]
+
+        return httpx2.Response(200, json=recorded)
+
+    return answer(request)
 
 
 @pytest.mark.parametrize("response_seconds", [0.0, 2.5])
@@ -92,6 +116,95 @@ async def test_all_gateway_operations_share_pacing_and_sign_after_waiting(
     assert timestamps == expected_timestamps
 
 
+async def test_a_burst_goes_a_second_apart_then_each_request_waits_for_its_refill(
+    request_clock: FakeRequestClock, request_limits: RequestLimits
+) -> None:
+    sent: list[float] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request_clock.elapsed)
+
+        return answer(request)
+
+    async def search_many(gateway: FatSecretApi, searches: int) -> None:
+        async with anyio.create_task_group() as group:
+            for _ in range(searches):
+                group.start_soon(gateway.search_catalog, "skyr")
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+        gateway = FatSecretApi(CONSUMER, http, request_limits=request_limits)
+
+        await search_many(gateway, 16)
+
+        # Half a minute without requests refills the whole burst.
+        request_clock.elapsed = 48.0
+        await search_many(gateway, 10)
+
+    # Ten requests held, plus four refilled while those go, start a second apart; the 15th waits
+    # for the rest of its refill, and each one after it for a whole refill of three seconds.
+    burst = [float(second) for second in range(14)]
+    refilled = [15.0, 18.0]
+    after_idling = [48.0 + second for second in range(10)]
+
+    assert sent == pytest.approx(burst + refilled + after_idling)
+
+
+async def test_a_plate_of_seven_components_is_searched_and_drafted_without_a_burst_of_requests(
+    household: Household, clock: FakeClock, request_clock: FakeRequestClock, request_limits: RequestLimits
+) -> None:
+    components = ["white rice", "beef", "fried egg", "pak choi", "bean sprouts", "carrot", "gochujang"]
+    sent: list[tuple[str, float]] = []
+    search_seconds: list[float] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        sent.append((request.url.params["method"], request_clock.elapsed))
+
+        return catalog_answer(request)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+        gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=clock,
+            signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
+            food_cache=FoodCache(clock=clock),
+        )
+
+        async with Client(server) as client:
+            for component in components:
+                started = request_clock.elapsed
+                found = await client.call_tool("search_foods", {"description": component})
+
+                assert not found.is_error
+                search_seconds.append(request_clock.elapsed - started)
+
+            items = [
+                {"food_id": f"{component}/0", "serving_id": "50321", "number_of_units": 100}
+                for component in components
+            ]
+            started = request_clock.elapsed
+            drafted = await client.call_tool("draft_entries", {"items": items})
+            draft_seconds = request_clock.elapsed - started
+
+    sent_methods = [method for method, _ in sent]
+    methods = Counter(sent_methods)
+    sent_at = [seconds for _, seconds in sent]
+    burst = [float(second) for second in range(14)]
+    refilled = [float(second) for second in range(15, 58, 3)]
+    rounded_search_seconds = [round(seconds) for seconds in search_seconds]
+
+    assert not drafted.is_error, drafted.content
+    # Each search is one catalog search and three Foods; the Draft reads only the Diary Day.
+    assert methods == {"foods.search": 7, "food.get.v5": 21, "food_entries.get.v2": 1}
+    # Ten held plus four refilled go a second apart, then one every three seconds: 29 in 57 s.
+    assert sent_at == pytest.approx(burst + refilled)
+    # The first searches use the burst; later ones wait for refills, twelve seconds at most.
+    assert rounded_search_seconds == [3, 4, 4, 7, 12, 12, 12]
+    assert round(draft_seconds) == 3
+
+
 async def test_error_12_stops_queued_calls_until_the_cooldown_without_extending_it(
     request_clock: FakeRequestClock, request_limits: RequestLimits
 ) -> None:
@@ -134,6 +247,36 @@ async def test_error_12_stops_queued_calls_until_the_cooldown_without_extending_
 
     assert found == []
     assert sent == [0.0, 30.0]
+
+
+async def test_logs_tell_fatsecrets_error_12_from_requests_the_cooldown_did_not_send(
+    household: Household, clock: FakeClock, request_limits: RequestLimits, caplog: pytest.LogCaptureFixture
+) -> None:
+    def respond(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"error": {"code": 12}})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
+        gateway = FatSecretApi(household.consumer, http, request_limits=request_limits)
+        server = build_server(
+            user=household.user("jakub"),
+            fatsecret=gateway,
+            clock=clock,
+            signing_key=household.signing_key,
+            daily_requests=daily_budget(len(household.users)),
+            food_cache=FoodCache(clock=clock),
+        )
+
+        async with Client(server) as client:
+            await client.call_tool("search_foods", {"description": "skyr"})
+            await client.call_tool("get_diary_day", {})
+
+    client_records = [record for record in caplog.records if record.name == "fatsecret_mcp.fatsecret.client"]
+    messages = [record.getMessage() for record in client_records]
+
+    assert messages == [
+        "FatSecret foods.search failed: TooManyActions (code 12)",
+        "FatSecret food_entries.get.v2 not sent: TooManyActions (code 12)",
+    ]
 
 
 @pytest.mark.parametrize("code", [9, 20])
@@ -297,6 +440,7 @@ async def test_a_failed_history_scan_cancels_remaining_reads_instead_of_sending_
             clock=clock,
             signing_key=household.signing_key,
             daily_requests=daily_budget(len(household.users)),
+            food_cache=FoodCache(clock=clock),
         )
 
         async with Client(server) as client:
@@ -331,6 +475,7 @@ async def test_throttling_a_search_also_stops_other_tools_during_the_same_cooldo
             clock=clock,
             signing_key=household.signing_key,
             daily_requests=daily_budget(len(household.users)),
+            food_cache=FoodCache(clock=clock),
         )
 
         async with Client(server) as client:

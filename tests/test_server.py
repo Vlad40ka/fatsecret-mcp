@@ -15,6 +15,7 @@ from fatsecret_mcp.config.models import Household
 from fatsecret_mcp.domain.models import FoodEntry, Meal
 from fatsecret_mcp.fatsecret import diary as diary_module
 from fatsecret_mcp.fatsecret.budget import daily_budget
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.fatsecret.gateway import AccessToken
 from fatsecret_mcp.server import build_server
 from tests.conftest import FakeClock
@@ -47,13 +48,13 @@ async def cache_day(
     return reference
 
 
-async def wait_until_collected(reference: weakref.ReferenceType[FoodEntry]) -> None:
+async def wait_until_collected[T](reference: weakref.ReferenceType[T]) -> None:
     with anyio.move_on_after(2):
         while reference() is not None:
             gc.collect()
             await anyio.sleep(0.001)
 
-    assert reference() is None, "The server still retains an expired Food Entry."
+    assert reference() is None, "The server still retains what has expired."
 
 
 async def test_an_idle_server_releases_expired_entries_without_another_request(
@@ -85,6 +86,7 @@ async def test_stopping_the_server_releases_unexpired_entries_even_if_the_server
         clock=clock,
         signing_key=household.signing_key,
         daily_requests=daily_budget(len(household.users)),
+        food_cache=FoodCache(clock=clock),
     )
 
     async with Client(server) as client:

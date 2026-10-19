@@ -15,8 +15,10 @@ import pytest
 from mcp import Client
 
 from fatsecret_mcp.config.loader import acting_user, load_household
+from fatsecret_mcp.domain.diary_day import system_clock
 from fatsecret_mcp.fatsecret.budget import daily_budget
 from fatsecret_mcp.fatsecret.client import FatSecretApi
+from fatsecret_mcp.fatsecret.food_cache import FoodCache
 from fatsecret_mcp.server import build_server
 
 pytestmark = [
@@ -39,6 +41,7 @@ async def test_reads_todays_diary_day_from_the_real_fatsecret() -> None:
                 fatsecret=FatSecretApi(household.consumer, http),
                 signing_key=household.signing_key,
                 daily_requests=daily_budget(len(household.users)),
+                food_cache=FoodCache(clock=system_clock),
             )
         ) as client,
     ):
