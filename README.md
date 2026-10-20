@@ -6,9 +6,9 @@
 
 Log food to your FatSecret diary by talking to Claude on your phone. Claude shows you a draft first, and nothing is saved until you say yes.
 
-<!-- DEMO VIDEO: a 20–30 second phone recording goes here (photo of a nutrition label → the draft → "yes" → the entry in the FatSecret app). Upload the MP4 through GitHub's web editor so it plays inline. -->
+https://github.com/user-attachments/assets/f150042f-8aaf-4a51-aacf-6346a40a7a6e
 
-> **Demo video coming soon.** It will show a photo of a nutrition label, the draft Claude proposes, a "yes", and the new entry in the FatSecret app.
+A photo of dinner, the draft Claude proposes, a "yes", the day so far, and the new entry in the FatSecret app.
 
 fatsecret-mcp is a self-hosted [MCP](https://modelcontextprotocol.io) server. It connects Claude to your own [FatSecret](https://www.fatsecret.com) food diary, the one you see in the FatSecret app. Claude can read a day or a few weeks of it against your daily calorie and macro targets. It can find foods in the FatSecret catalog and draft entries from a description or a photo. Each draft shows the amounts, calories, macros, a suggested meal and how your day looks after adding it. When a packaged product isn't in the catalog, a photo of its nutrition label is enough.
 
