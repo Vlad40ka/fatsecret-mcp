@@ -48,7 +48,7 @@ FatSecret calls are signed with OAuth 1.0, so the server works from changing out
 Use the same configuration as above. Docker's `--env-file` expects `KEY=value` lines without shell quotes, so keep `FATSECRET_MCP_USERS` as a single JSON line without the surrounding single quotes.
 
 ```sh
-docker run --rm --env-file .env -p 8080:8080 \
+docker run --rm --env-file .env -p 127.0.0.1:8080:8080 \
   -e FATSECRET_MCP_BASE_URL=http://127.0.0.1:8080 \
   ghcr.io/jaronskijakub/fatsecret-mcp:latest
 ```
