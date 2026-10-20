@@ -1,5 +1,9 @@
 # fatsecret-mcp
 
+[![CI](https://github.com/jaronskijakub/fatsecret-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jaronskijakub/fatsecret-mcp/actions/workflows/ci.yml)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
+
 Log food to your FatSecret diary by talking to Claude on your phone. Claude shows you a draft first, and nothing is saved until you say yes.
 
 <!-- DEMO VIDEO: a 20–30 second phone recording goes here (photo of a nutrition label → the draft → "yes" → the entry in the FatSecret app). Upload the MP4 through GitHub's web editor so it plays inline. -->
@@ -70,7 +74,7 @@ sequenceDiagram
     actor U as You (Claude app)
     participant C as Claude
     participant S as fatsecret-mcp
-    participant F as FatSecret
+    participant F as FatSecret API
     U->>C: photo + "log this as lunch"
     C->>S: search_foods
     S->>F: foods.search, food.get
@@ -87,16 +91,16 @@ The draft is signed by the server and expires after thirty minutes. It can only 
 
 ## Products the catalog doesn't have
 
-A free FatSecret API key reaches only the US catalog, in English. Most local and branded products aren't in it. For those, send Claude a photo of the nutrition label. The server logs the product as a stand-in: the closest catalog food, in the amount whose calories match the label, under the product's own name.
+A free FatSecret API key reaches only the US catalog, in English. Most local and branded products aren't in it. For those, Claude asks for a photo of the nutrition label, or you type its values. The server logs the product as a stand-in: the closest catalog food, in the amount whose calories match the label, under the product's own name.
 
 ```mermaid
 flowchart TD
-    S[Search the catalog for the product] --> Q{Found?}
+    S[Claude searches the catalog] --> Q{Found?}
     Q -- yes --> E[Normal food entry]
-    Q -- no --> P[Photo of the nutrition label]
-    P --> V[kcal and macros per 100 g]
-    V --> M[Closest catalog food, amount set so kcal match]
-    M --> N[Food entry under the product's own name]
+    Q -- no --> P["You send a photo of the label<br/>or type its values"]
+    P --> V[Claude reads the calories and macros]
+    V --> M["The server picks the closest catalog food<br/>and sets the amount so calories match"]
+    M --> N[Entry saved under the product's own name]
 ```
 
 Calories match the label exactly; macros are close but approximate. Opening the entry's details in the FatSecret app shows the catalog food underneath. The server rejects a label whose calories don't roughly agree with its macros, which catches a misread photo or kJ taken for kcal. It doesn't remember stand-ins: next time, Claude reuses the label from the conversation or asks again.
@@ -137,6 +141,16 @@ The short path:
 3. In Claude, add `https://<your-server>/mcp` as a custom connector and sign in ([connector](docs/connector.md)).
 
 To try it on your own computer first, run it over stdio with Claude Code; [setup](docs/setup.md#run-it-with-claude-code) covers that too. Request quotas, pacing and caching are described in [limits](docs/limits.md), and the trust model in [SECURITY.md](SECURITY.md).
+
+## Documentation
+
+- [Setup](docs/setup.md): configuration, adding people, their settings, and running it locally with Claude Code.
+- [Deploy](docs/deploy.md): Railway, other container hosts, Docker, and building the image yourself.
+- [Connector](docs/connector.md): adding the server to Claude, sign-in, and signing someone out.
+- [Limits](docs/limits.md): the daily quota, pacing, search, drafts and input sizes.
+- [Changelog](CHANGELOG.md): what changed in each version.
+
+Report vulnerabilities through [SECURITY.md](SECURITY.md), which also describes the trust model and what is stored where.
 
 ## Roadmap
 
