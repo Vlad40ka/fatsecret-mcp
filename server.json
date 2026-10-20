@@ -1,0 +1,52 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jaronskijakub/fatsecret-mcp",
+  "description": "Unofficial, self-hosted MCP server for logging food into a FatSecret food diary through Claude.",
+  "repository": {
+    "url": "https://github.com/jaronskijakub/fatsecret-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "fatsecret-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FATSECRET_CONSUMER_KEY",
+          "description": "Your FatSecret Platform API consumer key.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FATSECRET_CONSUMER_SECRET",
+          "description": "Your FatSecret Platform API consumer secret.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FATSECRET_MCP_SIGNING_KEY",
+          "description": "A random key of at least 32 characters that signs drafts. Keep it across restarts.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FATSECRET_MCP_USERS",
+          "description": "Everyone the server serves, as one JSON line written by `fatsecret-mcp add-user`.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "FATSECRET_MCP_USER",
+          "description": "With more than one person in FATSECRET_MCP_USERS: the id the server acts as.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

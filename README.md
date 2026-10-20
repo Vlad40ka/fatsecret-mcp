@@ -1,8 +1,11 @@
 # fatsecret-mcp
 
+<!-- mcp-name: io.github.jaronskijakub/fatsecret-mcp -->
+
 [![CI](https://github.com/jaronskijakub/fatsecret-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jaronskijakub/fatsecret-mcp/actions/workflows/ci.yml)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/fatsecret-mcp)](https://pypi.org/project/fatsecret-mcp/)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/LICENSE)
 
 Log food to your FatSecret diary by talking to Claude on your phone. Claude shows you a draft first, and nothing is saved until you say yes.
 
@@ -136,21 +139,21 @@ You need:
 
 The short path:
 
-1. Create a `.env` with your FatSecret key and a signing key, then run `add-user` once per person ([setup](docs/setup.md)).
-2. Deploy the image `ghcr.io/jaronskijakub/fatsecret-mcp` with those values ([deploy](docs/deploy.md)).
-3. In Claude, add `https://<your-server>/mcp` as a custom connector and sign in ([connector](docs/connector.md)).
+1. Create a `.env` with your FatSecret key and a signing key, then run `uvx --env-file .env fatsecret-mcp add-user` once per person ([setup](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/setup.md)).
+2. Deploy the image `ghcr.io/jaronskijakub/fatsecret-mcp` with those values ([deploy](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/deploy.md)).
+3. In Claude, add `https://<your-server>/mcp` as a custom connector and sign in ([connector](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/connector.md)).
 
-To try it on your own computer first, run it over stdio with Claude Code; [setup](docs/setup.md#run-it-with-claude-code) covers that too. Request quotas, pacing and caching are described in [limits](docs/limits.md), and the trust model in [SECURITY.md](SECURITY.md).
+To try it on your own computer first, run it over stdio with Claude Code; [setup](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/setup.md#run-it-with-claude-code) covers that too. Request quotas, pacing and caching are described in [limits](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/limits.md), and the trust model in [SECURITY.md](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/SECURITY.md).
 
 ## Documentation
 
-- [Setup](docs/setup.md): configuration, adding people, their settings, and running it locally with Claude Code.
-- [Deploy](docs/deploy.md): Railway, other container hosts, Docker, and building the image yourself.
-- [Connector](docs/connector.md): adding the server to Claude, sign-in, and signing someone out.
-- [Limits](docs/limits.md): the daily quota, pacing, search, drafts and input sizes.
-- [Changelog](CHANGELOG.md): what changed in each version.
+- [Setup](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/setup.md): configuration, adding people, their settings, and running it locally with Claude Code.
+- [Deploy](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/deploy.md): Railway, other container hosts, Docker, and building the image yourself.
+- [Connector](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/connector.md): adding the server to Claude, sign-in, and signing someone out.
+- [Limits](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/limits.md): the daily quota, pacing, search, drafts and input sizes.
+- [Changelog](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/CHANGELOG.md): what changed in each version.
 
-Report vulnerabilities through [SECURITY.md](SECURITY.md), which also describes the trust model and what is stored where.
+Report vulnerabilities through [SECURITY.md](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/SECURITY.md), which also describes the trust model and what is stored where.
 
 ## Roadmap
 
@@ -170,8 +173,10 @@ uv run pyright
 uv run pytest
 ```
 
-The tests never call FatSecret. They replay recorded responses from `tests/fixtures/fatsecret/`. An opt-in smoke test reads your real diary: `FATSECRET_LIVE_SMOKE=1 uv run --env-file .env pytest tests/test_live_smoke.py`. Container tests are described in [deploy](docs/deploy.md#build-and-test-the-image).
+The tests never call FatSecret. They replay recorded responses from `tests/fixtures/fatsecret/`. An opt-in smoke test reads your real diary: `FATSECRET_LIVE_SMOKE=1 uv run --env-file .env pytest tests/test_live_smoke.py`. Container tests are described in [deploy](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/docs/deploy.md#build-and-test-the-image).
+
+To release a version, set it with `uv version X.Y.Z` and in both places in `server.json`, and give it a dated entry in `CHANGELOG.md`; `tests/test_package.py` checks that they agree. Push that commit to `main` and wait for CI, which publishes its image. Then push the tag `vX.Y.Z`. The release workflow checks that CI passed on `main` for that commit, builds and checks the package, adds the version tag to the commit's image, publishes the package to PyPI and creates the GitHub release from the changelog entry. In a public repository it also publishes `server.json` to the MCP registry.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/jaronskijakub/fatsecret-mcp/blob/main/LICENSE)

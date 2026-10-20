@@ -2,7 +2,7 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-20
 
 The first release.
 
@@ -16,4 +16,7 @@ The first release.
 - Sign-in hardening: PKCE, refresh tokens, signing out by `session_generation`, throttling and pinned Claude client values.
 - A daily share of the FatSecret quota for each person, paced requests and in-memory caching.
 - The `add-user`, `check` and `serve` commands.
-- A container image for Linux amd64 and arm64, published to GHCR by CI.
+- A package on PyPI, so `uvx fatsecret-mcp` runs the server and the commands without a clone.
+- A container image for Linux amd64 and arm64, published to GHCR by CI and tagged with each release version.
+
+[0.1.0]: https://github.com/jaronskijakub/fatsecret-mcp/releases/tag/v0.1.0

@@ -4,7 +4,7 @@ This page covers the configuration every server needs, adding people to it, and 
 
 ## Configuration
 
-The server reads its configuration only from environment variables. Locally, keep them in a `.env` file in the repository (it's git-ignored):
+The server reads its configuration only from environment variables. Locally, keep them in a `.env` file (in a clone of the repository it's git-ignored):
 
 ```sh
 FATSECRET_CONSUMER_KEY=...
@@ -31,13 +31,13 @@ Keep it across restarts and deploys. Changing it invalidates every open draft an
 
 ## Add a person
 
-You need Python 3.13 and [uv](https://docs.astral.sh/uv/), or Docker. With uv, in a clone of the repository:
+You need [uv](https://docs.astral.sh/uv/) or Docker, and no clone of the repository. With uv, which also fetches Python 3.13 if you don't have it:
 
 ```sh
-uv run --env-file .env fatsecret-mcp add-user
+uvx --env-file .env fatsecret-mcp add-user
 ```
 
-With Docker, no clone needed:
+With Docker:
 
 ```sh
 docker run -it --rm --env-file .env ghcr.io/jaronskijakub/fatsecret-mcp fatsecret-mcp add-user
@@ -81,7 +81,7 @@ Daily targets are in kcal and grams. They live here, not in the FatSecret app, a
 ## Check the configuration
 
 ```sh
-uv run --env-file .env fatsecret-mcp check
+uvx --env-file .env fatsecret-mcp check
 ```
 
 `check` validates the configuration the way `serve` does at startup: the HTTP settings when `FATSECRET_MCP_BASE_URL` is set, otherwise the acting person for stdio. Then it reads each person's current diary day, one FatSecret request per person, and reports whether the connection works. A revoked access token, an exhausted daily quota and an IP restriction each get their own message. It prints no tokens, secrets or passwords, and exits with status 1 if anything failed.
@@ -91,7 +91,7 @@ uv run --env-file .env fatsecret-mcp check
 Without a command, `fatsecret-mcp` serves over stdio, the same as `fatsecret-mcp serve`. Add it to Claude Code:
 
 ```sh
-claude mcp add fatsecret -- uv run --directory /path/to/fatsecret-mcp --env-file .env fatsecret-mcp
+claude mcp add fatsecret -- uvx --env-file /path/to/.env fatsecret-mcp
 ```
 
 With more than one person in `FATSECRET_MCP_USERS`, set `FATSECRET_MCP_USER` to the `id` to act as. A local stdio copy counts its FatSecret requests separately from a deployed server with the same key, so the two can together go over the daily quota described in [limits](limits.md).

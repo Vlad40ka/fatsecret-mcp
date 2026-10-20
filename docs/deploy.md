@@ -1,6 +1,6 @@
 # Deploy
 
-The server runs as a container. CI publishes the image `ghcr.io/jaronskijakub/fatsecret-mcp` for Linux amd64 and arm64, tagged `latest` and with the full commit SHA of each push to `main`.
+The server runs as a container. CI publishes the image `ghcr.io/jaronskijakub/fatsecret-mcp` for Linux amd64 and arm64, tagged `latest` and with the full commit SHA of each push to `main`. Each release also tags its image with the version number, such as `0.1.0`.
 
 Before deploying, prepare the configuration and add everyone with `add-user` ([setup](setup.md)). Every person needs a connector password for HTTP.
 
@@ -16,7 +16,7 @@ Confirmed drafts are remembered in memory only. If two instances serve at once, 
 
 These steps run the published image on [Railway](https://railway.com). An always-on service with one replica uses little memory and CPU, but it isn't free: check your plan's included usage, and look at the actual usage after a few days.
 
-1. **Create the service.** In a new project, choose to deploy a Docker image and enter the image with a full commit SHA tag, for example `ghcr.io/jaronskijakub/fatsecret-mcp:<sha>`. A fixed tag means a new version deploys only when you change it.
+1. **Create the service.** In a new project, choose to deploy a Docker image and enter the image with a fixed tag: a release version such as `ghcr.io/jaronskijakub/fatsecret-mcp:0.1.0`, or a full commit SHA. A fixed tag means a new version deploys only when you change it.
 2. **Settings.** Set the healthcheck path to `/health`. Keep Serverless off and replicas at 1. Don't set `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS`: by default Railway removes the old deployment once the new one is active.
 3. **Networking.** Generate a Railway domain that targets port `8080`.
 4. **Variables.**
@@ -30,7 +30,7 @@ These steps run the published image on [Railway](https://railway.com). An always
 6. **Spending limit.** In your workspace's usage settings, set a Compute email alert, and a hard limit if you want one. A hard limit stops every service in the workspace, not only this one.
 7. **Add the connector** in Claude ([connector](connector.md)).
 
-To update, change the image tag to a newer commit SHA and redeploy. To add a person, run `add-user` against your current `FATSECRET_MCP_USERS` and replace the variable with the new value. Variables survive deploys.
+To update, change the image tag to a newer version or commit SHA and redeploy. To add a person, run `add-user` against your current `FATSECRET_MCP_USERS` and replace the variable with the new value. Variables survive deploys.
 
 ## Other container hosts
 
@@ -66,7 +66,7 @@ The image starts HTTP on `0.0.0.0:8080`, runs as a non-root user, and checks `/h
 ## Without a container
 
 ```sh
-uv run --env-file .env fatsecret-mcp serve --transport http --host 127.0.0.1 --port 8000
+uvx --env-file .env fatsecret-mcp serve --transport http --host 127.0.0.1 --port 8000
 ```
 
 Put an HTTPS reverse proxy in front of it and set `FATSECRET_MCP_BASE_URL` to the public origin. Configuration errors stop the server before it starts listening.
