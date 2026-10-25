@@ -26,6 +26,7 @@ from fatsecret_mcp.domain.models import (
     Nutrition,
     NutritionLabel,
     PeriodDaySummary,
+    RepeatedFrom,
     Serving,
     StandIn,
 )
@@ -133,14 +134,37 @@ class NutritionLabelDraftInput(BaseModel):
     assumption: Assumption = None
 
 
+class DiaryEntryDraftInput(BaseModel):
+    """A Food Entry from the Food Diary, logged again under its own name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    diary_day: date = Field(description="The Diary Day get_diary_day showed it on, as YYYY-MM-DD.")
+    food_entry_id: CatalogId = Field(description="The food_entry_id get_diary_day showed.")
+    metric_amount: float | None = Field(
+        default=None,
+        gt=0,
+        le=10000,
+        allow_inf_nan=False,
+        description=(
+            "Grams eaten this time, or ml for an entry measured in ml. Omit for the same amount; "
+            "the Draft shows it in grams or ml when its weight is known."
+        ),
+    )
+    assumption: Assumption = None
+
+
 # Fields only a Nutrition Label item has, so one missing its label is still told what it lacks.
 NUTRITION_LABEL_ITEM_FIELDS = {"product_name", "nutrition_label", "grams", "search_phrase"}
 
 
 def _draft_item_kind(item: Any) -> str:
-    """Tells the two kinds of item apart by the fields only a Nutrition Label item has."""
+    """Tells the three kinds of item apart by the fields only a Nutrition Label or Diary Entry item has."""
     if isinstance(item, NutritionLabelDraftInput):
         return "nutrition_label"
+
+    if isinstance(item, DiaryEntryDraftInput):
+        return "diary_entry"
 
     if isinstance(item, dict):
         present = [field in item for field in NUTRITION_LABEL_ITEM_FIELDS]
@@ -148,11 +172,16 @@ def _draft_item_kind(item: Any) -> str:
         if any(present):
             return "nutrition_label"
 
+        if "food_entry_id" in item:
+            return "diary_entry"
+
     return "food"
 
 
 DraftItemInput = Annotated[
-    Annotated[FoodDraftInput, Tag("food")] | Annotated[NutritionLabelDraftInput, Tag("nutrition_label")],
+    Annotated[FoodDraftInput, Tag("food")]
+    | Annotated[NutritionLabelDraftInput, Tag("nutrition_label")]
+    | Annotated[DiaryEntryDraftInput, Tag("diary_entry")],
     Discriminator(_draft_item_kind),
 ]
 
@@ -197,6 +226,7 @@ class Amounts(BaseModel):
 
 
 class DiaryEntry(BaseModel):
+    food_entry_id: str = Field(description="Pass it to draft_entries to log this Food Entry again.")
     name: str
     amount: str = Field(description='The amount in its Serving, e.g. "150 g" or "2 servings".')
     kcal: int
@@ -209,6 +239,7 @@ class DiaryEntry(BaseModel):
         amounts = Amounts.of(entry.nutrition)
 
         return cls(
+            food_entry_id=entry.id,
             name=entry.name,
             amount=entry.amount,
             kcal=amounts.kcal,
@@ -343,6 +374,18 @@ class StandInDetails(BaseModel):
         )
 
 
+class RepeatedFromDetails(BaseModel):
+    diary_day: date
+    meal: Meal
+
+    @classmethod
+    def of(cls, repeated_from: RepeatedFrom) -> RepeatedFromDetails:
+        return cls(
+            diary_day=repeated_from.diary_day,
+            meal=repeated_from.meal,
+        )
+
+
 class ProposedEntry(BaseModel):
     food_id: str
     serving_id: str
@@ -358,11 +401,15 @@ class ProposedEntry(BaseModel):
     stand_in: StandInDetails | None = Field(
         description="Set when the entry is a Stand-in for a product missing from the catalog."
     )
+    repeated_from: RepeatedFromDetails | None = Field(
+        description="Set when the entry repeats a Food Entry from the Food Diary, not a new match."
+    )
 
     @classmethod
     def of(cls, item: DraftItem) -> ProposedEntry:
         amounts = Amounts.of(item.nutrition)
         stand_in = _stand_in_details(item)
+        repeated_from = _repeated_from_details(item)
 
         return cls(
             food_id=item.entry.food_id,
@@ -377,6 +424,7 @@ class ProposedEntry(BaseModel):
             carbohydrate=amounts.carbohydrate,
             assumption=item.assumption,
             stand_in=stand_in,
+            repeated_from=repeated_from,
         )
 
 
@@ -467,6 +515,13 @@ def _stand_in_details(item: DraftItem) -> StandInDetails | None:
         return None
 
     return StandInDetails.of(item.stand_in, item.nutrition)
+
+
+def _repeated_from_details(item: DraftItem) -> RepeatedFromDetails | None:
+    if item.repeated_from is None:
+        return None
+
+    return RepeatedFromDetails.of(item.repeated_from)
 
 
 def _confirmation_status(

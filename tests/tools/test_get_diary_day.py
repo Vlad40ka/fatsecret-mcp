@@ -53,18 +53,16 @@ async def test_food_entries_are_grouped_by_meal_in_the_order_of_the_day(
     connect: Connect, fatsecret: FakeFatSecret, household: Household
 ) -> None:
     jakub = household.user("jakub").fatsecret
+    chicken = food_entry(
+        "Kurczak", Meal.LUNCH, TODAY, kcal=293, protein=44.32, fat=11.58, carbohydrate=0, amount="150 g"
+    )
 
     fatsecret.add_food_entry(
         jakub, food_entry("Zupa pomidorowa", Meal.LUNCH, TODAY, kcal=180, amount="300 g")
     )
     fatsecret.add_food_entry(jakub, food_entry("Baton proteinowy", Meal.SNACKS, TODAY, kcal=200))
     fatsecret.add_food_entry(jakub, food_entry("Owsianka", Meal.BREAKFAST, TODAY, kcal=350))
-    fatsecret.add_food_entry(
-        jakub,
-        food_entry(
-            "Kurczak", Meal.LUNCH, TODAY, kcal=293, protein=44.32, fat=11.58, carbohydrate=0, amount="150 g"
-        ),
-    )
+    fatsecret.add_food_entry(jakub, chicken)
 
     async with connect("jakub") as client:
         day = await get_diary_day(client)
@@ -75,6 +73,7 @@ async def test_food_entries_are_grouped_by_meal_in_the_order_of_the_day(
 
     assert [entry["name"] for entry in lunch] == ["Zupa pomidorowa", "Kurczak"]
     assert lunch[1] == {
+        "food_entry_id": chicken.id,
         "name": "Kurczak",
         "amount": "150 g",
         "kcal": 293,

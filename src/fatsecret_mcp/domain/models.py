@@ -158,6 +158,24 @@ class DraftItem:
     assumption: str | None
     stand_in: StandIn | None = None
     """Set when the entry logs a catalog Food in place of a product missing from the catalog."""
+    repeated_from: RepeatedFrom | None = None
+    """Set when the entry logs a Food Entry from the Food Diary again."""
+
+
+@dataclass(frozen=True)
+class RepeatedFrom:
+    """Where in the Food Diary a repeated Food Entry was taken from."""
+
+    diary_day: date
+    meal: Meal
+
+
+@dataclass(frozen=True)
+class MetricAmount:
+    """An amount in grams or millilitres."""
+
+    amount: float
+    unit: str
 
 
 @dataclass(frozen=True)

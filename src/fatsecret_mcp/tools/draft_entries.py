@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated
 
 from mcp.server import MCPServer
@@ -21,7 +22,14 @@ from fatsecret_mcp.domain.drafts import (
     draft_totals,
 )
 from fatsecret_mcp.domain.meal_suggestion import ask_about_previous_day, suggest_meal
-from fatsecret_mcp.domain.models import Draft, DraftItem, Meal, Serving
+from fatsecret_mcp.domain.models import Draft, DraftItem, Food, FoodEntry, Meal, MetricAmount, Serving
+from fatsecret_mcp.domain.repeated_entries import (
+    check_source_day,
+    repeated_item,
+    serving_metric_amount,
+    source_entry,
+    written_metric_amount,
+)
 from fatsecret_mcp.domain.stand_ins import check_label, stand_in_item
 from fatsecret_mcp.fatsecret.catalog import loggable_foods
 from fatsecret_mcp.fatsecret.diary import UserDiary
@@ -33,6 +41,7 @@ from fatsecret_mcp.tools.schemas import (
     Amounts,
     DayAfter,
     DiaryDayOrToday,
+    DiaryEntryDraftInput,
     DraftItemInput,
     DraftItems,
     FoodDraft,
@@ -41,6 +50,9 @@ from fatsecret_mcp.tools.schemas import (
     ProposedEntry,
     as_tool_result,
 )
+
+# The entries of each Diary Day that a Draft's Diary Entry items repeat from.
+SourceDays = dict[date, list[FoodEntry]]
 
 
 def register(
@@ -75,6 +87,13 @@ def register(
         label values, the logged values and the difference. If the User dislikes the Stand-in,
         draft again with a different search_phrase.
 
+        A Diary Entry item logs a Food Entry from the Food Diary again, under its own name, with its
+        Food, Serving and nutrition, so no catalog search is needed. For "the same as yesterday's
+        breakfast", read that Diary Day with get_diary_day, list its Food Entries with their amounts
+        to the User and ask whether everything was the same, or what to leave out or eat more or less
+        of. Then draft the chosen entries by diary_day and food_entry_id, with metric_amount for a
+        changed amount in grams or ml.
+
         A Draft holds at most 20 items: split a larger meal into several Drafts.
 
         Include assumptions about estimated amounts. Always ask the User whether the suggested Meal
@@ -94,10 +113,12 @@ def register(
         try:
             check_diary_day(day, user_today)
 
-            for item in items:
-                prepared.append(await _prepared_item(item, fatsecret, food_cache))
+            source_days = await _source_days(items, diary, user_today)
 
-            entries = await diary.entries(day)
+            for item in items:
+                prepared.append(await _prepared_item(item, fatsecret, food_cache, source_days))
+
+            entries = source_days[day] if day in source_days else await diary.entries(day)
         except (FatSecretError, InvalidDraftItem, UnlikelyDiaryDay) as error:
             raise ToolError(str(error)) from error
 
@@ -133,15 +154,77 @@ def register(
         return as_tool_result(result)
 
 
+async def _source_days(items: DraftItems, diary: UserDiary, user_today: date) -> SourceDays:
+    """The entries of each Diary Day that Diary Entry items repeat from, each day read once.
+
+    Every source day is checked before the first read, so a refused one costs no request.
+    """
+    repeated_days = [item.diary_day for item in items if isinstance(item, DiaryEntryDraftInput)]
+    days = list(dict.fromkeys(repeated_days))
+    entries: SourceDays = {}
+
+    for day in days:
+        check_source_day(day, user_today)
+
+    for day in days:
+        entries[day] = await diary.entries(day)
+
+    return entries
+
+
 async def _prepared_item(
-    item: DraftItemInput, fatsecret: FatSecretGateway, food_cache: FoodCache
+    item: DraftItemInput,
+    fatsecret: FatSecretGateway,
+    food_cache: FoodCache,
+    source_days: SourceDays,
 ) -> DraftItem:
     if isinstance(item, NutritionLabelDraftInput):
         return await _stand_in(item, fatsecret, food_cache)
 
+    if isinstance(item, DiaryEntryDraftInput):
+        return await _repeated(item, fatsecret, food_cache, source_days)
+
     name, serving = await _resolve_serving(item, fatsecret, food_cache)
 
     return draft_item(item.food_id, name, serving, item.number_of_units, item.assumption)
+
+
+async def _repeated(
+    item: DiaryEntryDraftInput,
+    fatsecret: FatSecretGateway,
+    food_cache: FoodCache,
+    source_days: SourceDays,
+) -> DraftItem:
+    source = source_entry(source_days[item.diary_day], item.food_entry_id, item.diary_day)
+    source_amount = written_metric_amount(source)
+
+    # Only an amount not written in grams or ml costs a lookup of its Serving's weight.
+    if source_amount is None:
+        source_amount = await _looked_up_metric_amount(source, fatsecret, food_cache)
+
+    return repeated_item(
+        source=source,
+        source_amount=source_amount,
+        eaten_amount=item.metric_amount,
+        assumption=item.assumption,
+    )
+
+
+async def _looked_up_metric_amount(
+    source: FoodEntry, fatsecret: FatSecretGateway, food_cache: FoodCache
+) -> MetricAmount | None:
+    """The source's amount from its catalog Serving's weight; None when the catalog can't tell."""
+    try:
+        catalog_food = await food_cache.get_food(source.food_id, fatsecret)
+    except NotFound:
+        return None
+
+    serving = _serving_of(catalog_food, source.serving_id)
+
+    if serving is None:
+        return None
+
+    return serving_metric_amount(source, serving)
 
 
 async def _stand_in(
@@ -174,9 +257,15 @@ async def _resolve_serving(
     except NotFound:
         raise ToolError("Unknown Food: use the ids of a match from search_foods.") from None
 
-    servings = [serving for serving in catalog_food.servings if serving.id == item.serving_id]
+    serving = _serving_of(catalog_food, item.serving_id)
 
-    if not servings:
+    if serving is None:
         raise ToolError("Serving does not belong to this Food.")
 
-    return catalog_food.name, servings[0]
+    return catalog_food.name, serving
+
+
+def _serving_of(food: Food, serving_id: str) -> Serving | None:
+    servings = [serving for serving in food.servings if serving.id == serving_id]
+
+    return servings[0] if servings else None

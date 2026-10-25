@@ -62,8 +62,9 @@ def draft_item(
 
     ratio = number_of_units / serving.number_of_units
     nutrition = serving.nutrition.scaled(ratio)
+    metric_amount = serving.metric_amount * ratio if serving.metric_amount is not None else None
 
-    _check_amount(serving, ratio, nutrition)
+    check_plausible(nutrition, metric_amount)
 
     amount = _amount(serving, ratio)
     entry = DraftEntry(
@@ -82,15 +83,13 @@ def draft_item(
     )
 
 
-def _check_amount(serving: Serving, ratio: float, nutrition: Nutrition) -> None:
+def check_plausible(nutrition: Nutrition, metric_amount: float | None) -> None:
+    """Reject an item over 20000 kcal, or over 10000 g or ml when its weight is known."""
     if not math.isfinite(nutrition.kcal) or nutrition.kcal > MAX_KCAL:
         raise InvalidDraftItem("Amount is implausibly large: at most 20000 kcal per item.")
 
-    if serving.metric_amount is not None:
-        amount = serving.metric_amount * ratio
-
-        if not math.isfinite(amount) or amount > MAX_METRIC_AMOUNT:
-            raise InvalidDraftItem("Amount is implausibly large: at most 10000 g or ml per item.")
+    if metric_amount is not None and (not math.isfinite(metric_amount) or metric_amount > MAX_METRIC_AMOUNT):
+        raise InvalidDraftItem("Amount is implausibly large: at most 10000 g or ml per item.")
 
 
 def _amount(serving: Serving, ratio: float) -> str:

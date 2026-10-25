@@ -131,6 +131,7 @@ async def test_a_draft_shows_amount_assumption_totals_and_the_day_after_without_
         "carbohydrate": 42.3,
         "assumption": "A bowl ≈ 150 g",
         "stand_in": None,
+        "repeated_from": None,
     }
     assert proposed["items"][1]["assumption"] is None
     assert proposed["totals"] == {"kcal": 260, "protein": 5.4, "fat": 0.6, "carbohydrate": 56.4}

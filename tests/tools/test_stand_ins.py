@@ -183,6 +183,7 @@ async def test_a_nutrition_label_picks_the_closest_catalog_food_and_matches_kcal
                 "difference": {"kcal": 0, "protein": 0.8, "fat": -0.7, "carbohydrate": 2.0},
                 "estimated": False,
             },
+            "repeated_from": None,
         }
     ]
     assert proposed["totals"] == {"kcal": 190, "protein": 15.8, "fat": 6.3, "carbohydrate": 19.0}
@@ -292,12 +293,16 @@ async def test_a_confirmed_stand_in_is_written_under_the_products_name_and_the_f
             "entry_name": "Baton proteinowy DZIK",
         }
     ]
+    assert confirmed.structured_content is not None
     assert day.structured_content is not None
+    written_id = confirmed.structured_content["entries"][0]["food_entry_id"]
+
     assert day.structured_content["meals"] == [
         {
             "meal": "lunch",
             "food_entries": [
                 {
+                    "food_entry_id": written_id,
                     "name": "Baton proteinowy DZIK",
                     "amount": "0.792 units",
                     "kcal": 190,

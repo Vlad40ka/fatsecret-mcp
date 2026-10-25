@@ -108,7 +108,24 @@ flowchart TD
 
 Calories match the label exactly; macros are close but approximate. Opening the entry's details in the FatSecret app shows the catalog food underneath. The server rejects a label whose calories don't roughly agree with its macros, which catches a misread photo or kJ taken for kcal. It doesn't remember stand-ins: next time, Claude reuses the label from the conversation or asks again.
 
-If you log a product often, adding it once in the FatSecret app (which scans barcodes) gives you exact values there.
+If you log a product often, adding it once in the FatSecret app (which scans barcodes) gives you exact values there. After that, Claude can repeat it from your diary.
+
+## Repeat an earlier meal
+
+> **You:** The same as yesterday's breakfast.
+>
+> **Claude:** Yesterday's breakfast was:
+> - Rolled oats, 80 g: 300 kcal
+> - 2% milk, 250 ml: 125 kcal
+> - Greek yoghurt, 150 g: 90 kcal
+>
+> Was it all the same today, or should I leave something out or change an amount?
+>
+> **You:** Without the yoghurt, and half the milk.
+>
+> **Claude:** Here's the draft, repeated from yesterday: rolled oats, 80 g, and 2% milk, 125 ml, 362 kcal in all. Should it go under breakfast today? Then I'll save it.
+
+Claude reads the earlier day and drafts the entries you keep, without searching the catalog. The server copies each entry's food, serving, name and nutrition from your diary and scales them when you change an amount, always shown in grams or ml. It also works for products the catalog can't return, such as ones you added in the FatSecret app, and for stand-ins, which keep the product's name and don't need the label again. An amount that wasn't logged in grams or ml, such as "2 slices", is looked up once to show it in grams; when no weight is known, the entry is repeated as it was.
 
 ## What it doesn't do
 
@@ -160,8 +177,8 @@ Report vulnerabilities through [SECURITY.md](https://github.com/jaronskijakub/fa
 - Edit and delete food entries, starting with "undo that" right after a wrong save.
 - Custom foods for users with a FatSecret Premier key, so a branded product can be logged with exact values instead of a stand-in.
 - Open Food Facts lookups for products the US catalog lacks, by name or barcode.
-- Your own recent foods. Products you often log aren't searched yet; reading them from your diary took too many API requests, so this needs another approach.
-- Remember products logged from a label, so a stand-in doesn't need the photo again. This needs persistent storage.
+- Search your own foods by name. Anything in your diary can already be repeated from the day you logged it, but products you often log aren't searched yet; reading them from your whole diary took too many API requests, so this needs another approach.
+- Remember products logged from a label, so a stand-in doesn't need the photo again when it isn't repeated from your diary. This needs persistent storage.
 - Native confirmation dialogs in Claude for saving a draft, instead of a "yes" in the chat.
 
 ## Development
