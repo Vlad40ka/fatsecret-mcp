@@ -2,12 +2,14 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-25
 
 ### Added
 
 - Repeating earlier Food Entries: "the same as yesterday's breakfast" drafts entries from your diary by their `food_entry_id`, with their own food, serving, name and nutrition, and an amount in grams or ml that may change. This works for products the catalog can't return and for stand-ins.
 - `get_diary_day` shows each entry's `food_entry_id`.
+
+After upgrading, reconnect the connector in Claude, so that Claude sees the new tool options.
 
 ## [0.1.0] - 2026-10-20
 
