@@ -106,9 +106,11 @@ flowchart TD
     M --> N[Entry saved under the product's own name]
 ```
 
-Calories match the label exactly; macros are close but approximate. Opening the entry's details in the FatSecret app shows the catalog food underneath. The server rejects a label whose calories don't roughly agree with its macros, which catches a misread photo or kJ taken for kcal. It doesn't remember stand-ins: next time, Claude reuses the label from the conversation or asks again.
+Calories match the label exactly, but macros are only close, and sometimes noticeably off. This comes from translating a product outside the US catalog into a US one. A diary entry can't carry its own calories or macros; it only points at a catalog food and takes that food's values. A free key can't create foods, so the server picks the US food whose macros are nearest to the label. Your product's exact macros usually exist nowhere in the US catalog, so there's nothing closer to pick. The draft shows the label's values, the logged ones and the difference before you confirm, and opening the entry's details in the FatSecret app shows the catalog food underneath.
 
-If you log a product often, adding it once in the FatSecret app (which scans barcodes) gives you exact values there. After that, Claude can repeat it from your diary.
+The server rejects a label whose calories don't roughly agree with its macros, which catches a misread photo or kJ taken for kcal. It doesn't remember stand-ins: next time, Claude reuses the label from the conversation or asks again. Repeating a stand-in from your diary keeps its name and its approximate macros.
+
+If you log a product often, adding it once in the FatSecret app gives you exact values there. After that, Claude can repeat it from your diary.
 
 ## Repeat an earlier meal
 

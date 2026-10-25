@@ -30,7 +30,7 @@ These steps run the published image on [Railway](https://railway.com). An always
 6. **Spending limit.** In your workspace's usage settings, set a Compute email alert, and a hard limit if you want one. A hard limit stops every service in the workspace, not only this one.
 7. **Add the connector** in Claude ([connector](connector.md)).
 
-To update, change the image tag to a newer version or commit SHA and redeploy. To add a person, run `add-user` against your current `FATSECRET_MCP_USERS` and replace the variable with the new value. Variables survive deploys.
+To update, change the image tag to a newer version or commit SHA and redeploy. When a release changes the tools, its changelog entry says so: reconnect the connector in Claude afterwards, since Claude keeps the tool descriptions it saw when it connected. To add a person, run `add-user` against your current `FATSECRET_MCP_USERS` and replace the variable with the new value. Variables survive deploys.
 
 ## Other container hosts
 
