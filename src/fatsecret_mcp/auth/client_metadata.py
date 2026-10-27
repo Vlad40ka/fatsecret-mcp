@@ -102,7 +102,7 @@ async def _download(http: httpx2.AsyncClient, url: str) -> bytes | None:
 
 def _is_public_code_client(client: OAuthClientInformationFull, client_id: str) -> bool:
     """A client without a secret that describes itself and uses the authorization-code flow."""
-    if client.client_id != client_id or client.token_endpoint_auth_method != "none" or client.client_secret:
+    if client.client_id != client_id or client.token_endpoint_auth_method not in ("none", "private_key_jwt") or client.client_secret:
         return False
 
     return "authorization_code" in client.grant_types and "code" in client.response_types
