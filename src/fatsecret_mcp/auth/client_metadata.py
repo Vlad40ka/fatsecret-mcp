@@ -41,7 +41,7 @@ class ClaudeMetadata:
 
     async def lookup(self, client_id: str) -> OAuthClientInformationFull | FetchLimited | None:
         """Claude's client, a refusal while fetches are used up, or None for anything else."""
-        if client_id != CLAUDE_CLIENT_ID:
+        if client_id not in (CLAUDE_CLIENT_ID, "https://chatgpt.com/oauth/client.json"):
             return None
 
         async with self.lock:
