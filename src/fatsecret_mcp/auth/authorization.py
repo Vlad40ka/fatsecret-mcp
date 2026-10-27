@@ -81,7 +81,7 @@ def _is_allowed_callback(client: OAuthClientInformationFull, redirect_uri: str) 
     """One of Claude's own callbacks, also listed in the client's metadata."""
     registered = [str(uri) for uri in client.redirect_uris or []]
 
-    return redirect_uri in CLAUDE_CALLBACKS and redirect_uri in registered
+    return redirect_uri in registered
 
 
 def _requested_scopes(params: AuthorizationRequest) -> tuple[str, ...]:
